@@ -25,10 +25,10 @@ jobs:
       - name: Build
         run: npx opennextjs-cloudflare build
 
-      - name: Create Pages worker entry
+      - name: Create Pages worker entry and routes
         run: |
-          echo "export { default } from '../worker.js';" > .open-next/assets/_worker.js
-          echo "export * from '../worker.js';" >> .open-next/assets/_worker.js
+          printf "export { default } from '../worker.js';\nexport * from '../worker.js';\n" > .open-next/assets/_worker.js
+          printf '{"version":1,"include":["/*"],"exclude":["/_next/static/*","/favicon.ico","/*.svg","/BUILD_ID"]}\n' > .open-next/assets/_routes.json
 
       - name: Deploy to Cloudflare Pages
         run: npx wrangler pages deploy .open-next/assets --project-name=image-background-remover --branch=main
