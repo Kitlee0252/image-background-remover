@@ -24,6 +24,11 @@ jobs:
       - name: Build
         run: npx opennextjs-cloudflare build
 
+      - name: Create Pages worker entry
+        run: |
+          echo "export { default } from '../worker.js';" > .open-next/assets/_worker.js
+          echo "export * from '../worker.js';" >> .open-next/assets/_worker.js
+
       - name: Deploy to Cloudflare Pages
         run: npx wrangler pages deploy .open-next/assets --project-name=image-background-remover --branch=main
         env:
