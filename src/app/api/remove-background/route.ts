@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+export const runtime = "edge";
+
 const REMOVE_BG_API_KEY = process.env.REMOVE_BG_API_KEY;
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
@@ -63,7 +65,12 @@ export async function POST(request: NextRequest) {
     }
 
     const resultBuffer = await response.arrayBuffer();
-    const base64 = Buffer.from(resultBuffer).toString("base64");
+    const bytes = new Uint8Array(resultBuffer);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    const base64 = btoa(binary);
 
     return NextResponse.json({
       image: `data:image/png;base64,${base64}`,
