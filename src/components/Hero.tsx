@@ -1,8 +1,9 @@
 interface HeroProps {
   onUploadClick: () => void;
+  isAuthenticated?: boolean;
 }
 
-export default function Hero({ onUploadClick }: HeroProps) {
+export default function Hero({ onUploadClick, isAuthenticated = true }: HeroProps) {
   return (
     <section className="text-center py-16 px-4 bg-gradient-to-b from-indigo-50 to-white">
       <h1 className="text-4xl md:text-5xl font-bold text-gray-900 mb-4">
@@ -16,7 +17,7 @@ export default function Hero({ onUploadClick }: HeroProps) {
         onClick={onUploadClick}
         className="px-8 py-3 bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white font-semibold rounded-lg transition-colors text-lg cursor-pointer"
       >
-        Upload Images
+        {isAuthenticated ? "Upload Images" : "Sign in to Start"}
       </button>
     </section>
   );
