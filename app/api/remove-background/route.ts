@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "../../../auth";
+import { getMonthlyUsage, recordUsage } from "@/lib/usage";
 
 const REMOVE_BG_API_KEY = process.env.REMOVE_BG_API_KEY;
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -6,6 +8,29 @@ const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
 const ALLOWED_SIZES = ["preview", "auto", "hd", "full"] as const;
 
 export async function POST(request: NextRequest) {
+  // --- Auth check ---
+  const session = await auth();
+  if (!session?.user?.id) {
+    return NextResponse.json(
+      { error: "Authentication required." },
+      { status: 401 }
+    );
+  }
+
+  // --- Quota check ---
+  const { used, limit, plan } = await getMonthlyUsage(session.user.id);
+  if (used >= limit) {
+    return NextResponse.json(
+      {
+        error: `Monthly quota exceeded (${used}/${limit} on ${plan} plan).`,
+        code: "quota_exceeded",
+        used,
+        limit,
+      },
+      { status: 403 }
+    );
+  }
+
   if (!REMOVE_BG_API_KEY) {
     return NextResponse.json(
       { error: "Service is not configured. Please contact the administrator." },
@@ -75,6 +100,9 @@ export async function POST(request: NextRequest) {
       binary += String.fromCharCode(bytes[i]);
     }
     const base64 = btoa(binary);
+
+    // Record usage after successful processing
+    await recordUsage(session.user.id, size);
 
     return NextResponse.json({
       image: `data:image/png;base64,${base64}`,
