@@ -18,8 +18,8 @@ export default function UserMenu() {
   useEffect(() => {
     if (open && !usage) {
       fetch("/api/usage")
-        .then((r) => r.json())
-        .then((data: UsageData) => setUsage(data))
+        .then((r) => r.json() as Promise<UsageData>)
+        .then((data) => setUsage(data))
         .catch(() => {});
     }
   }, [open, usage]);
