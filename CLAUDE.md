@@ -71,7 +71,7 @@ REMOVE_BG_API_KEY=xxx                # remove.bg API Key，仅服务端使用
 ## GitHub 仓库
 
 - **地址**：https://github.com/Kitlee0252/image-background-remover
-- **GitHub Token**：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（有效期 1 个月，含 workflow 权限）
+- **GitHub Token**：已内嵌在 git remote URL 中，不在文件中明文存储
 - **remote 已内嵌 token**，可直接 `git push origin main`
 
 ## Cloudflare 部署
