@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useMemo } from "react";
+import { useSession, signIn } from "next-auth/react";
 import Header from "@/components/Header";
 import Hero from "@/components/Hero";
 import UploadZone from "@/components/UploadZone";
@@ -10,6 +11,7 @@ import QualitySelector from "@/components/QualitySelector";
 import HowItWorks from "@/components/HowItWorks";
 import FAQ from "@/components/FAQ";
 import Footer from "@/components/Footer";
+import UsageBanner from "@/components/UsageBanner";
 import {
   FileItem,
   QualitySize,
@@ -22,9 +24,11 @@ import {
 const CONCURRENCY = 2;
 
 export default function Home() {
+  const { status: authStatus } = useSession();
   const [files, setFiles] = useState<FileItem[]>([]);
   const [globalQuality, setGlobalQuality] = useState<QualitySize>("auto");
   const [errorMessage, setErrorMessage] = useState<string>("");
+  const [quotaExceeded, setQuotaExceeded] = useState<{used: number; limit: number} | null>(null);
   const uploadRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -121,9 +125,15 @@ export default function Home() {
         const data = (await response.json()) as {
           image?: string;
           error?: string;
+          code?: string;
+          used?: number;
+          limit?: number;
         };
 
         if (!response.ok) {
+          if (data.code === "quota_exceeded") {
+            setQuotaExceeded({ used: data.used!, limit: data.limit! });
+          }
           throw new Error(data?.error || "Failed to remove background");
         }
         if (!data.image) {
@@ -250,121 +260,145 @@ export default function Home() {
     <div className="min-h-screen flex flex-col bg-white">
       <Header />
       <main className="flex-1">
-        <Hero onUploadClick={handleUploadClick} />
+        {authStatus === "loading" && (
+          <div className="flex items-center justify-center py-32">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-200 border-t-indigo-500" />
+          </div>
+        )}
 
-        <section ref={uploadRef} className="max-w-4xl mx-auto px-4 py-12">
-          {/* Upload zone: show when idle or when can add more files */}
-          {(phase === "idle" || phase === "selected") && (
-            <>
-              <UploadZone
-                onFilesSelect={handleFilesSelect}
-                fileInputRef={fileInputRef}
-              />
-              {errorMessage && (
-                <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-center text-sm">
-                  {errorMessage}
+        {authStatus === "unauthenticated" && (
+          <>
+            <Hero onUploadClick={() => signIn("google")} isAuthenticated={false} />
+            <HowItWorks />
+            <FAQ />
+          </>
+        )}
+
+        {authStatus === "authenticated" && (
+          <>
+            <Hero onUploadClick={handleUploadClick} isAuthenticated={true} />
+
+            {quotaExceeded && (
+              <div className="max-w-4xl mx-auto px-4 pt-6">
+                <UsageBanner used={quotaExceeded.used} limit={quotaExceeded.limit} />
+              </div>
+            )}
+
+            <section ref={uploadRef} className="max-w-4xl mx-auto px-4 py-12">
+              {/* Upload zone: show when idle or when can add more files */}
+              {(phase === "idle" || phase === "selected") && (
+                <>
+                  <UploadZone
+                    onFilesSelect={handleFilesSelect}
+                    fileInputRef={fileInputRef}
+                  />
+                  {errorMessage && (
+                    <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-center text-sm">
+                      {errorMessage}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Selected: show previews + quality selector + process button */}
+              {phase === "selected" && files.length > 0 && (
+                <div className="mt-8 space-y-6">
+                  {/* Preview grid */}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                    {files.map((f) => (
+                      <div
+                        key={f.id}
+                        className="relative border border-gray-200 rounded-lg overflow-hidden bg-gray-50"
+                      >
+                        <div className="h-32 flex items-center justify-center">
+                          <img
+                            src={f.previewUrl}
+                            alt={f.originalFileName}
+                            className="max-h-full max-w-full object-contain p-2"
+                          />
+                        </div>
+                        <div className="px-2 py-1.5 flex items-center justify-between">
+                          <p className="text-xs text-gray-600 truncate flex-1">
+                            {f.originalFileName}
+                          </p>
+                          <button
+                            onClick={() => handleRemoveFile(f.id)}
+                            className="ml-1 text-gray-400 hover:text-red-500 cursor-pointer text-sm"
+                            title="Remove"
+                          >
+                            &times;
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Quality selector + action buttons */}
+                  <QualitySelector
+                    value={globalQuality}
+                    onChange={setGlobalQuality}
+                  />
+
+                  <div className="flex gap-4 justify-center">
+                    <button
+                      onClick={processAllFiles}
+                      className="px-8 py-3 bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white font-semibold rounded-lg transition-colors cursor-pointer"
+                    >
+                      {files.length === 1
+                        ? "Remove Background"
+                        : `Remove Backgrounds (${files.length})`}
+                    </button>
+                    <button
+                      onClick={handleReset}
+                      className="px-8 py-3 border border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 transition-colors cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 </div>
               )}
-            </>
-          )}
 
-          {/* Selected: show previews + quality selector + process button */}
-          {phase === "selected" && files.length > 0 && (
-            <div className="mt-8 space-y-6">
-              {/* Preview grid */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-                {files.map((f) => (
-                  <div
-                    key={f.id}
-                    className="relative border border-gray-200 rounded-lg overflow-hidden bg-gray-50"
-                  >
-                    <div className="h-32 flex items-center justify-center">
-                      <img
-                        src={f.previewUrl}
-                        alt={f.originalFileName}
-                        className="max-h-full max-w-full object-contain p-2"
-                      />
-                    </div>
-                    <div className="px-2 py-1.5 flex items-center justify-between">
-                      <p className="text-xs text-gray-600 truncate flex-1">
-                        {f.originalFileName}
-                      </p>
-                      <button
-                        onClick={() => handleRemoveFile(f.id)}
-                        className="ml-1 text-gray-400 hover:text-red-500 cursor-pointer text-sm"
-                        title="Remove"
-                      >
-                        &times;
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              {/* Processing: show batch view with live status */}
+              {phase === "processing" && (
+                <div className="mt-8">
+                  <BatchResultView
+                    files={files}
+                    onDownload={handleDownloadOne}
+                    onDownloadAll={handleDownloadAll}
+                    onRetry={handleRetry}
+                    onRemove={handleRemoveFile}
+                    onReset={handleReset}
+                  />
+                </div>
+              )}
 
-              {/* Quality selector + action buttons */}
-              <QualitySelector
-                value={globalQuality}
-                onChange={setGlobalQuality}
-              />
+              {/* Done: single file uses original ResultView, multi uses BatchResultView */}
+              {phase === "done" && singleFile && singleFile.status === "success" && (
+                <ResultView
+                  originalUrl={singleFile.previewUrl}
+                  resultUrl={singleFile.resultUrl!}
+                  onDownload={() => handleDownloadOne(singleFile.id)}
+                  onReset={handleReset}
+                  qualityLabel={singleFile.qualitySize}
+                />
+              )}
 
-              <div className="flex gap-4 justify-center">
-                <button
-                  onClick={processAllFiles}
-                  className="px-8 py-3 bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white font-semibold rounded-lg transition-colors cursor-pointer"
-                >
-                  {files.length === 1
-                    ? "Remove Background"
-                    : `Remove Backgrounds (${files.length})`}
-                </button>
-                <button
-                  onClick={handleReset}
-                  className="px-8 py-3 border border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-50 transition-colors cursor-pointer"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
+              {phase === "done" && (!singleFile || singleFile.status === "error") && (
+                <BatchResultView
+                  files={files}
+                  onDownload={handleDownloadOne}
+                  onDownloadAll={handleDownloadAll}
+                  onRetry={handleRetry}
+                  onRemove={handleRemoveFile}
+                  onReset={handleReset}
+                />
+              )}
+            </section>
 
-          {/* Processing: show batch view with live status */}
-          {phase === "processing" && (
-            <div className="mt-8">
-              <BatchResultView
-                files={files}
-                onDownload={handleDownloadOne}
-                onDownloadAll={handleDownloadAll}
-                onRetry={handleRetry}
-                onRemove={handleRemoveFile}
-                onReset={handleReset}
-              />
-            </div>
-          )}
-
-          {/* Done: single file uses original ResultView, multi uses BatchResultView */}
-          {phase === "done" && singleFile && singleFile.status === "success" && (
-            <ResultView
-              originalUrl={singleFile.previewUrl}
-              resultUrl={singleFile.resultUrl!}
-              onDownload={() => handleDownloadOne(singleFile.id)}
-              onReset={handleReset}
-              qualityLabel={singleFile.qualitySize}
-            />
-          )}
-
-          {phase === "done" && (!singleFile || singleFile.status === "error") && (
-            <BatchResultView
-              files={files}
-              onDownload={handleDownloadOne}
-              onDownloadAll={handleDownloadAll}
-              onRetry={handleRetry}
-              onRemove={handleRemoveFile}
-              onReset={handleReset}
-            />
-          )}
-        </section>
-
-        <HowItWorks />
-        <FAQ />
+            <HowItWorks />
+            <FAQ />
+          </>
+        )}
       </main>
       <Footer />
     </div>
