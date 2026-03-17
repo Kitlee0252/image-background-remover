@@ -71,67 +71,19 @@ REMOVE_BG_API_KEY=xxx                # remove.bg API Key，仅服务端使用
 ## GitHub 仓库
 
 - **地址**：https://github.com/Kitlee0252/image-background-remover
-- **GitHub Token**：已内嵌在 git remote URL 中，不在文件中明文存储
-- **remote 已内嵌 token**，可直接 `git push origin main`
+- **认证**：token 已内嵌在 git remote URL 中，可直接 `git push origin main`
+- **敏感凭证**：存储在 Claude Code 本地记忆中（不提交 git）
 
 ## Cloudflare 部署
 
-### 账号信息
-
-- **Account ID**：ac80c5ab13ff6d8d923cb9abffc4f1f9
-- **API Token（Zone+DNS+Pages）**：GvkFXEE1oBCg4DSXcMJmv1ejmMwjjb7LSIf7YEov
-- **旧 API Token（已失效）**：~~ZHqLYWGGk7WjX6OZ6GcQAAe09T85Oez9p1tpf7lR~~
 - **Pages 项目名**：image-background-remover
 - **Pages 默认域名**：https://image-background-remover-7ql.pages.dev
+- **自定义域名**：imagebackgroundremover.live / www.imagebackgroundremover.live
+- **敏感凭证**（Account ID、API Token、Zone ID）：存储在 Claude Code 本地记忆中（不提交 git）
 
-### 自定义域名
-
-- **域名**：imagebackgroundremover.live
-- **注册商**：GoDaddy
-- **Zone ID**：cbc0e0ba9a886f8e1a4111b5cf5b8b71
-- **Cloudflare Nameservers**（需在 GoDaddy 设置）：
-  - `harlan.ns.cloudflare.com`
-  - `paislee.ns.cloudflare.com`
-- **DNS 记录**：
-  - `imagebackgroundremover.live` → CNAME → `image-background-remover-7ql.pages.dev`（Proxied）
-  - `www.imagebackgroundremover.live` → CNAME → `image-background-remover-7ql.pages.dev`（Proxied）
-- **Pages 自定义域名**：已绑定 `imagebackgroundremover.live` + `www.imagebackgroundremover.live`，SSL 证书自动签发中
-- **状态**：✅ DNS 已传播至 Cloudflare IP（104.21.2.69 / 172.67.128.220），SSL 证书签发中（2026-03-16）
-
-### 当前部署状态：🔴 未完成
-
-Pages 项目已重建，环境变量已设置（NODE_VERSION=18, REMOVE_BG_API_KEY），但网站返回 500。
-
-### 核心问题：Pages 部署 Next.js SSR worker 不生效
-
-**问题本质**：`wrangler pages deploy` 只上传静态文件。Next.js 需要 SSR worker 处理动态路由。opennextjs-cloudflare 构建生成的 `worker.js` 需要被包含在部署中。
-
-**已验证的关键发现**：
-
-1. **`_worker.js` 机制可行**：将 `_worker.js` 放入 `.open-next/assets/` 目录，`wrangler pages deploy` 会编译并上传 worker bundle
-2. **最小 worker 正常**：纯 `return new Response("Hello")` 的 `_worker.js` → 200 OK ✅
-3. **单个 import 正常**：`import("./cloudflare/init.js")` → 成功返回 ✅
-4. **完整 worker 崩溃**：使用原始 `worker.js`（含所有 import）→ 500 Internal Server Error ❌
-5. **try-catch 无法捕获**：错误发生在模块初始化阶段，非 fetch handler 内
-
-### 下一步排查方向
-
-**逐步 import 二分法**——当前已验证 `cloudflare/init.js` 可 import，继续测试：
-
-```
-1. import("./cloudflare/skew-protection.js")   → ?
-2. import("./cloudflare/images.js")             → ?
-3. import("./middleware/handler.mjs")            → ?
-4. import("./server-functions/default/handler.mjs") → ? （最可能出问题，体积最大）
-```
-
-找到出问题的 import 后，再深入排查该模块的具体错误。
-
-**部署命令**（本地部署）：
+### 部署流程
 
 ```bash
-cd "F:/home/memory-work/01 项目/image-background-remover"
-
 # 1. 构建
 npx opennextjs-cloudflare build
 
@@ -142,18 +94,14 @@ cp -r .open-next/.build .open-next/assets/
 cp -r .open-next/middleware .open-next/assets/
 cp -r .open-next/server-functions .open-next/assets/
 
-# 3. 部署
-CLOUDFLARE_API_TOKEN="GvkFXEE1oBCg4DSXcMJmv1ejmMwjjb7LSIf7YEov" \
-CLOUDFLARE_ACCOUNT_ID="ac80c5ab13ff6d8d923cb9abffc4f1f9" \
+# 3. 部署（凭证从 Claude Code 记忆或环境变量获取）
 npx wrangler pages deploy .open-next/assets \
   --project-name=image-background-remover --branch=main --commit-dirty=true
 ```
 
 ### GitHub Actions 自动部署
 
-已配置 `.github/workflows/deploy.yml`，但 **GitHub 账号因计费问题被锁定**（Actions 分钟数耗尽），workflow 无法执行。
-
-需要用户去 https://github.com/settings/billing 解决后，push 到 main 即可自动触发部署。
+已配置 `.github/workflows/deploy.yml`，但 GitHub 账号因计费问题被锁定（Actions 分钟数耗尽）。需要去 https://github.com/settings/billing 解决。
 
 ## 注意事项
 
