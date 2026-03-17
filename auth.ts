@@ -3,32 +3,23 @@ import Google from "next-auth/providers/google";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import { drizzle } from "drizzle-orm/d1";
 import { getD1 } from "@/lib/db";
-import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 export const { handlers, auth, signIn, signOut } = NextAuth(() => {
   const db = drizzle(getD1());
-  const { env } = getCloudflareContext();
 
   return {
     adapter: DrizzleAdapter(db),
-    providers: [
-      Google({
-        clientId: env.AUTH_GOOGLE_ID,
-        clientSecret: env.AUTH_GOOGLE_SECRET,
-      }),
-    ],
-    secret: env.AUTH_SECRET,
+    providers: [Google],
+    trustHost: true,
     session: { strategy: "jwt" as const },
     callbacks: {
       jwt({ token, user }) {
-        // On initial sign-in, persist the user ID into the JWT
         if (user?.id) {
           token.userId = user.id;
         }
         return token;
       },
       session({ session, token }) {
-        // Expose userId on the session object for client-side access
         if (token.userId && session.user) {
           session.user.id = token.userId as string;
         }
