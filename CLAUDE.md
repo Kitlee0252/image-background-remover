@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-在线图片去背景工具，MVP 阶段。核心链路：上传 → 调用 remove.bg → 返回透明 PNG → 下载。
+在线图片去背景工具。核心链路：Google 登录 → 上传 → 调用 remove.bg → 返回透明 PNG → 下载。支持用户认证和用量追踪（免费用户 3 次/月）。
 
 ## 技术栈
 
@@ -10,24 +10,41 @@
 - **样式**：Tailwind CSS 4
 - **语言**：TypeScript
 - **第三方 API**：remove.bg
+- **认证**：Auth.js v5 (next-auth@beta) + Google OAuth, JWT session 策略
+- **数据库**：Cloudflare D1（用户表 + 用量追踪表）
+- **ORM**：Drizzle ORM + @auth/drizzle-adapter
 - **部署目标**：Cloudflare Pages（通过 @opennextjs/cloudflare）
 
 ## 项目结构
 
 ```
 image-background-remover/           # 项目根目录（也是 git 根目录）
+├── auth.ts                          # Auth.js 配置（Google Provider, JWT, Drizzle Adapter）
+├── middleware.ts                    # API 路由保护（JWT session 检查）
 ├── app/                             # Next.js App Router（必须在根级，不能在 src/ 下）
-│   ├── layout.tsx                   # 根布局 + SEO metadata
-│   ├── page.tsx                     # 首页（客户端组件，FileItem[] 状态驱动）
+│   ├── layout.tsx                   # 根布局 + SEO metadata + AuthProvider
+│   ├── page.tsx                     # 首页（客户端组件，认证状态条件渲染）
 │   ├── globals.css                  # Tailwind 主题（--color-primary: #6366f1）
+│   ├── api/auth/[...nextauth]/
+│   │   └── route.ts                 # Auth.js 路由（登录/回调/登出）
 │   ├── api/remove-background/
-│   │   └── route.ts                 # 转发 remove.bg，支持 size 参数，返回 base64 JSON
+│   │   └── route.ts                 # 转发 remove.bg，含认证 + 用量检查
+│   ├── api/usage/
+│   │   └── route.ts                 # 用量查询端点
 │   └── privacy/page.tsx             # 隐私说明页
 ├── src/
 │   ├── types.ts                     # 共享类型：FileItem, QualitySize, AppPhase, 常量
+│   ├── env.d.ts                     # CloudflareEnv 类型声明（D1 binding）
+│   ├── lib/
+│   │   ├── db.ts                    # D1 数据库访问 helper
+│   │   └── usage.ts                 # 用量查询/记录函数
 │   └── components/                  # UI 组件
+│       ├── AuthProvider.tsx          # SessionProvider 包装
+│       ├── LoginButton.tsx           # Google 登录按钮
+│       ├── UserMenu.tsx              # 用户头像 + 下拉菜单（额度、登出）
+│       ├── UsageBanner.tsx           # 额度用尽提示条
 │       ├── Header.tsx / Footer.tsx
-│       ├── Hero.tsx                  # CTA 区域
+│       ├── Hero.tsx                  # CTA 区域（认证/未认证两种文案）
 │       ├── UploadZone.tsx            # 拖拽/点击上传（支持多文件）
 │       ├── QualitySelector.tsx       # 清晰度选择器（Preview/Standard/HD/Ultra HD）
 │       ├── ResultView.tsx            # 单文件：原图 vs 结果对比
@@ -35,11 +52,13 @@ image-background-remover/           # 项目根目录（也是 git 根目录）
 │       ├── FileCard.tsx              # 批量结果中的单张卡片
 │       ├── HowItWorks.tsx            # 三步流程
 │       └── FAQ.tsx                   # 手风琴 FAQ
+├── migrations/
+│   └── 0001_initial_schema.sql      # D1 建表：users, accounts, usage
 ├── .github/workflows/deploy.yml     # GitHub Actions 自动部署（待 GitHub 账号解锁）
-├── wrangler.jsonc                   # Cloudflare Pages 配置
+├── wrangler.jsonc                   # Cloudflare Pages 配置 + D1 binding
 ├── open-next.config.ts              # opennextjs-cloudflare 配置
-├── next.config.ts                   # Next.js 配置
-└── .env.local                       # REMOVE_BG_API_KEY（不提交）
+├── next.config.ts                   # Next.js 配置 + initOpenNextCloudflareForDev
+└── .env.local                       # 环境变量（不提交）
 ```
 
 ## 关键设计决策
@@ -51,7 +70,10 @@ image-background-remover/           # 项目根目录（也是 git 根目录）
 - **清晰度四档**：Preview (0.25 credit) / Standard (auto) / HD (1 credit) / Ultra HD (1 credit)，对应 remove.bg 的 preview/auto/hd/full。
 - **客户端 ZIP 打包**：批量下载使用 jszip 在浏览器端生成 ZIP，不依赖服务端。
 - **fileInputRef 提升到父组件**：Hero 按钮和 UploadZone 共享同一个 file input ref，实现 CTA 按钮直接触发文件选择。
-- **无存储架构**：不使用数据库、不落盘、不持久化用户图片。
+- **Auth.js JWT + Drizzle Adapter 混合模式**：JWT 管 session 传输（无需 session 表），Drizzle Adapter 管用户/账户持久化（首次登录写库）。Auth.js 配置使用 lazy initializer `NextAuth(() => {...})`，确保 D1 binding 在请求时才获取。
+- **强制登录**：未登录用户只能看首页 + 登录按钮，不能上传处理。
+- **用量限额**：免费用户 3 次/月，只有 remove.bg 成功返回才扣次数。`users.plan` 字段预留付费档位。
+- **不持久化用户图片**：图片仅在浏览器会话中存在，服务端不落盘。
 
 ## 开发命令
 
@@ -66,6 +88,9 @@ npx opennextjs-cloudflare build      # Cloudflare 构建
 
 ```
 REMOVE_BG_API_KEY=xxx                # remove.bg API Key，仅服务端使用
+AUTH_SECRET=xxx                      # Auth.js session 签名密钥
+AUTH_GOOGLE_ID=xxx                   # Google OAuth Client ID
+AUTH_GOOGLE_SECRET=xxx               # Google OAuth Client Secret
 ```
 
 ## GitHub 仓库
