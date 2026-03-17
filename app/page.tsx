@@ -118,7 +118,10 @@ export default function Home() {
           body: formData,
         });
 
-        const data = await response.json();
+        const data = (await response.json()) as {
+          image?: string;
+          error?: string;
+        };
 
         if (!response.ok) {
           throw new Error(data?.error || "Failed to remove background");
