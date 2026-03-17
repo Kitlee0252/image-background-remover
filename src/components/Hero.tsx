@@ -9,14 +9,14 @@ export default function Hero({ onUploadClick }: HeroProps) {
         Image Background Remover
       </h1>
       <p className="text-lg text-gray-600 max-w-2xl mx-auto mb-8">
-        Remove background from any image in seconds. Upload your image and
-        download a transparent PNG instantly.
+        Remove backgrounds from images in seconds. Upload one or multiple
+        images, choose your quality, and download transparent PNGs instantly.
       </p>
       <button
         onClick={onUploadClick}
         className="px-8 py-3 bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white font-semibold rounded-lg transition-colors text-lg cursor-pointer"
       >
-        Upload Image
+        Upload Images
       </button>
     </section>
   );

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 const REMOVE_BG_API_KEY = process.env.REMOVE_BG_API_KEY;
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
+const ALLOWED_SIZES = ["preview", "auto", "hd", "full"] as const;
 
 export async function POST(request: NextRequest) {
   if (!REMOVE_BG_API_KEY) {
@@ -37,9 +38,14 @@ export async function POST(request: NextRequest) {
     const arrayBuffer = await file.arrayBuffer();
     const blob = new Blob([arrayBuffer], { type: file.type });
 
+    const requestedSize = (formData.get("size") as string) || "auto";
+    const size = (ALLOWED_SIZES as readonly string[]).includes(requestedSize)
+      ? requestedSize
+      : "auto";
+
     const apiFormData = new FormData();
     apiFormData.append("image_file", blob, file.name || "image.png");
-    apiFormData.append("size", "auto");
+    apiFormData.append("size", size);
 
     const response = await fetch("https://api.remove.bg/v1.0/removebg", {
       method: "POST",

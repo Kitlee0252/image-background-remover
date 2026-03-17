@@ -1,8 +1,11 @@
+import { QualitySize, QUALITY_OPTIONS } from "@/types";
+
 interface ResultViewProps {
   originalUrl: string;
   resultUrl: string;
   onDownload: () => void;
   onReset: () => void;
+  qualityLabel?: QualitySize;
 }
 
 export default function ResultView({
@@ -10,7 +13,12 @@ export default function ResultView({
   resultUrl,
   onDownload,
   onReset,
+  qualityLabel,
 }: ResultViewProps) {
+  const qualityName = qualityLabel
+    ? QUALITY_OPTIONS.find((o) => o.value === qualityLabel)?.label
+    : null;
+
   return (
     <div className="space-y-8">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -25,7 +33,14 @@ export default function ResultView({
           </div>
         </div>
         <div className="space-y-2">
-          <h3 className="text-sm font-medium text-gray-500 text-center">Background Removed</h3>
+          <h3 className="text-sm font-medium text-gray-500 text-center">
+            Background Removed
+            {qualityName && (
+              <span className="ml-2 inline-block px-2 py-0.5 bg-indigo-100 text-[var(--color-primary)] text-xs rounded-full">
+                {qualityName}
+              </span>
+            )}
+          </h3>
           <div
             className="rounded-lg p-4 flex items-center justify-center min-h-[240px]"
             style={{
