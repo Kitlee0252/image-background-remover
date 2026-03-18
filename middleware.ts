@@ -9,6 +9,11 @@ export function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
+  // Let webhook routes pass through (PayPal etc.)
+  if (pathname.startsWith("/api/webhooks")) {
+    return NextResponse.next();
+  }
+
   // Check for session token (JWT strategy)
   const token =
     req.cookies.get("authjs.session-token")?.value ||

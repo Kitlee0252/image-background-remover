@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 interface UsageBannerProps {
   used: number;
   limit: number;
@@ -11,7 +13,12 @@ export default function UsageBanner({ used, limit }: UsageBannerProps) {
       <span className="font-medium">
         Monthly free quota used ({used}/{limit}).
       </span>{" "}
-      Upgrade for more.
+      <Link
+        href="/account?tab=plans"
+        className="font-medium text-indigo-600 hover:text-indigo-700 underline transition-colors"
+      >
+        Upgrade for more
+      </Link>
     </div>
   );
 }

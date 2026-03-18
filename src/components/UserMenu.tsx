@@ -2,27 +2,36 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useSession, signOut } from "next-auth/react";
+import Link from "next/link";
 
-interface UsageData {
+interface AccountData {
   used: number;
   limit: number;
   plan: string;
+  credits: number;
 }
 
 export default function UserMenu() {
   const { data: session } = useSession();
   const [open, setOpen] = useState(false);
-  const [usage, setUsage] = useState<UsageData | null>(null);
+  const [account, setAccount] = useState<AccountData | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (open && !usage) {
-      fetch("/api/usage")
-        .then((r) => r.json() as Promise<UsageData>)
-        .then((data) => setUsage(data))
+    if (open && !account) {
+      fetch("/api/account")
+        .then((r) => r.json())
+        .then((data) => {
+          setAccount({
+            used: data.usage?.used ?? 0,
+            limit: data.usage?.limit ?? 3,
+            plan: data.plan ?? "free",
+            credits: data.credits ?? 0,
+          });
+        })
         .catch(() => {});
     }
-  }, [open, usage]);
+  }, [open, account]);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -73,29 +82,43 @@ export default function UserMenu() {
 
           <div className="px-4 py-3 border-b border-gray-100">
             <p className="text-xs text-gray-500 mb-1">Monthly Usage</p>
-            {usage ? (
+            {account ? (
               <>
                 <div className="flex justify-between text-sm mb-1">
                   <span className="text-gray-700">
-                    {usage.used} / {usage.limit}
+                    {account.used} / {account.limit}
                   </span>
                   <span className="text-gray-500 capitalize">
-                    {usage.plan} plan
+                    {account.plan} plan
                   </span>
                 </div>
                 <div className="w-full bg-gray-200 rounded-full h-1.5">
                   <div
                     className="bg-indigo-500 h-1.5 rounded-full transition-all"
                     style={{
-                      width: `${Math.min((usage.used / usage.limit) * 100, 100)}%`,
+                      width: `${Math.min((account.used / account.limit) * 100, 100)}%`,
                     }}
                   />
                 </div>
+                {account.credits > 0 && (
+                  <p className="text-xs text-gray-500 mt-2">
+                    {account.credits} credit{account.credits !== 1 ? "s" : ""}{" "}
+                    available
+                  </p>
+                )}
               </>
             ) : (
               <p className="text-sm text-gray-400">Loading...</p>
             )}
           </div>
+
+          <Link
+            href="/account"
+            onClick={() => setOpen(false)}
+            className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+          >
+            Account Settings
+          </Link>
 
           <button
             onClick={() => signOut()}
