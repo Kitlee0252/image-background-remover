@@ -2,8 +2,8 @@ import { getD1 } from "./db";
 
 export const PLAN_LIMITS: Record<string, number> = {
   free: 3,
-  pro: 50,
-  unlimited: 999999,
+  basic: 40,
+  pro: 100,
 };
 
 /**
@@ -12,7 +12,7 @@ export const PLAN_LIMITS: Record<string, number> = {
 export async function getUserPlan(userId: string): Promise<string> {
   const db = getD1();
   const row = await db
-    .prepare("SELECT plan FROM users WHERE id = ?")
+    .prepare("SELECT plan FROM user WHERE id = ?")
     .bind(userId)
     .first<{ plan: string }>();
   return row?.plan ?? "free";
