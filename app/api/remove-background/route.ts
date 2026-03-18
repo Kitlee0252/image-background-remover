@@ -1,14 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "../../../auth";
 import { getMonthlyUsage, recordUsage } from "@/lib/usage";
+import { removeBackground } from "@/lib/photoroom";
 
-const REMOVE_BG_API_KEY = process.env.REMOVE_BG_API_KEY;
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
 const ALLOWED_SIZES = ["preview", "auto", "hd", "full"] as const;
 
+// Temporary plan-aware limits — will be replaced by plans.ts in Task 5
+const FILE_SIZE_LIMITS: Record<string, number> = {
+  free: 5 * 1024 * 1024,
+  basic: 25 * 1024 * 1024,
+  pro: 25 * 1024 * 1024,
+};
+
+const SIZE_INDEX: Record<string, number> = {
+  preview: 0, auto: 1, hd: 2, full: 3,
+};
+const QUALITY_CEILING: Record<string, number> = {
+  free: 2,    // max HD
+  basic: 3,   // max Ultra HD
+  pro: 3,
+};
+
 export async function POST(request: NextRequest) {
-  // --- Auth check ---
   const session = await auth();
   if (!session?.user?.id) {
     return NextResponse.json(
@@ -17,7 +31,6 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // --- Quota check ---
   const { used, limit, plan } = await getMonthlyUsage(session.user.id);
   if (used >= limit) {
     return NextResponse.json(
@@ -31,9 +44,10 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (!REMOVE_BG_API_KEY) {
+  const apiKey = process.env.PHOTOROOM_API_KEY;
+  if (!apiKey) {
     return NextResponse.json(
-      { error: "Service is not configured. Please contact the administrator." },
+      { error: "Service is not configured." },
       { status: 500 }
     );
   }
@@ -53,55 +67,43 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (file.size > MAX_FILE_SIZE) {
+    const maxSize = FILE_SIZE_LIMITS[plan] ?? FILE_SIZE_LIMITS.free;
+    if (file.size > maxSize) {
+      const limitMB = Math.round(maxSize / (1024 * 1024));
       return NextResponse.json(
-        { error: "File size exceeds 10MB limit." },
+        { error: `File size exceeds ${limitMB}MB limit for ${plan} plan.` },
         { status: 400 }
       );
+    }
+
+    const requestedSize = (formData.get("size") as string) || "auto";
+    let size = (ALLOWED_SIZES as readonly string[]).includes(requestedSize)
+      ? requestedSize
+      : "auto";
+
+    const maxSizeIndex = QUALITY_CEILING[plan] ?? QUALITY_CEILING.free;
+    if ((SIZE_INDEX[size] ?? 0) > maxSizeIndex) {
+      const capped = Object.entries(SIZE_INDEX).find(([, v]) => v === maxSizeIndex);
+      size = capped ? capped[0] : "hd";
     }
 
     const arrayBuffer = await file.arrayBuffer();
     const blob = new Blob([arrayBuffer], { type: file.type });
 
-    const requestedSize = (formData.get("size") as string) || "auto";
-    const size = (ALLOWED_SIZES as readonly string[]).includes(requestedSize)
-      ? requestedSize
-      : "auto";
+    const result = await removeBackground(apiKey, blob, file.name || "image.png", size);
 
-    const apiFormData = new FormData();
-    apiFormData.append("image_file", blob, file.name || "image.png");
-    apiFormData.append("size", size);
-
-    const response = await fetch("https://api.remove.bg/v1.0/removebg", {
-      method: "POST",
-      headers: {
-        "X-Api-Key": REMOVE_BG_API_KEY,
-      },
-      body: apiFormData,
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => "");
-      console.error("remove.bg API error:", response.status, errorText);
-      let detail = "Failed to remove background. Please try again later.";
-      try {
-        const errorData = JSON.parse(errorText);
-        if (errorData.errors?.[0]?.title) {
-          detail = errorData.errors[0].title;
-        }
-      } catch {}
-      return NextResponse.json({ error: detail }, { status: 502 });
+    if (!result.ok) {
+      console.error("PhotoRoom API error:", result.status, result.message);
+      return NextResponse.json({ error: result.message }, { status: 502 });
     }
 
-    const resultBuffer = await response.arrayBuffer();
-    const bytes = new Uint8Array(resultBuffer);
+    const bytes = new Uint8Array(result.imageBuffer);
     let binary = "";
     for (let i = 0; i < bytes.length; i++) {
       binary += String.fromCharCode(bytes[i]);
     }
     const base64 = btoa(binary);
 
-    // Record usage after successful processing
     await recordUsage(session.user.id, size);
 
     return NextResponse.json({

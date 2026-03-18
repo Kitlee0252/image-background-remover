@@ -21,7 +21,7 @@ export const QUALITY_OPTIONS: {
   { value: "preview", label: "Preview", description: "Low res, fastest" },
   { value: "auto", label: "Standard", description: "Good for most uses" },
   { value: "hd", label: "HD", description: "Up to 4 MP" },
-  { value: "full", label: "Ultra HD", description: "Original resolution" },
+  { value: "full", label: "Ultra HD", description: "Up to 36 MP" },
 ];
 
 export const MAX_FILES = 10;
