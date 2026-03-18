@@ -1,26 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "../../../auth";
-import { getMonthlyUsage, recordUsage } from "@/lib/usage";
+import { getMonthlyUsage, recordUsage, checkPlanExpiry } from "@/lib/usage";
+import { getCreditBalance, deductCredit } from "@/lib/credits";
+import { getEffectivePlan, capQuality, PlanId } from "@/lib/plans";
 import { removeBackground } from "@/lib/photoroom";
 
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
 const ALLOWED_SIZES = ["preview", "auto", "hd", "full"] as const;
-
-// Temporary plan-aware limits — will be replaced by plans.ts in Task 5
-const FILE_SIZE_LIMITS: Record<string, number> = {
-  free: 5 * 1024 * 1024,
-  basic: 25 * 1024 * 1024,
-  pro: 25 * 1024 * 1024,
-};
-
-const SIZE_INDEX: Record<string, number> = {
-  preview: 0, auto: 1, hd: 2, full: 3,
-};
-const QUALITY_CEILING: Record<string, number> = {
-  free: 2,    // max HD
-  basic: 3,   // max Ultra HD
-  pro: 3,
-};
 
 export async function POST(request: NextRequest) {
   const session = await auth();
@@ -31,11 +17,21 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { used, limit, plan } = await getMonthlyUsage(session.user.id);
-  if (used >= limit) {
+  const userId = session.user.id;
+
+  // 1. Resolve plan (auto-downgrade if expired)
+  const plan = await checkPlanExpiry(userId) as PlanId;
+
+  // 2. Get quota usage and credit balance
+  const { used, limit } = await getMonthlyUsage(userId);
+  const creditBalance = await getCreditBalance(userId);
+  const quotaExhausted = used >= limit;
+
+  // 3. Pre-check: if quota exhausted AND no credits, reject
+  if (quotaExhausted && creditBalance <= 0) {
     return NextResponse.json(
       {
-        error: `Monthly quota exceeded (${used}/${limit} on ${plan} plan).`,
+        error: `Monthly quota exceeded (${used}/${limit} on ${plan} plan). Purchase credits to continue.`,
         code: "quota_exceeded",
         used,
         limit,
@@ -43,6 +39,9 @@ export async function POST(request: NextRequest) {
       { status: 403 }
     );
   }
+
+  // 4. Compute effective plan (free+credits gets upgraded limits)
+  const effectivePlan = getEffectivePlan(plan, creditBalance);
 
   const apiKey = process.env.PHOTOROOM_API_KEY;
   if (!apiKey) {
@@ -67,25 +66,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const maxSize = FILE_SIZE_LIMITS[plan] ?? FILE_SIZE_LIMITS.free;
-    if (file.size > maxSize) {
-      const limitMB = Math.round(maxSize / (1024 * 1024));
+    // 5. File size check using effective plan limits
+    if (file.size > effectivePlan.maxFileSizeBytes) {
+      const limitMB = Math.round(effectivePlan.maxFileSizeBytes / (1024 * 1024));
       return NextResponse.json(
         { error: `File size exceeds ${limitMB}MB limit for ${plan} plan.` },
         { status: 400 }
       );
     }
 
+    // 6. Quality ceiling via capQuality
     const requestedSize = (formData.get("size") as string) || "auto";
-    let size = (ALLOWED_SIZES as readonly string[]).includes(requestedSize)
+    const validSize = (ALLOWED_SIZES as readonly string[]).includes(requestedSize)
       ? requestedSize
       : "auto";
-
-    const maxSizeIndex = QUALITY_CEILING[plan] ?? QUALITY_CEILING.free;
-    if ((SIZE_INDEX[size] ?? 0) > maxSizeIndex) {
-      const capped = Object.entries(SIZE_INDEX).find(([, v]) => v === maxSizeIndex);
-      size = capped ? capped[0] : "hd";
-    }
+    const size = capQuality(validSize, effectivePlan);
 
     const arrayBuffer = await file.arrayBuffer();
     const blob = new Blob([arrayBuffer], { type: file.type });
@@ -104,7 +99,11 @@ export async function POST(request: NextRequest) {
     }
     const base64 = btoa(binary);
 
-    await recordUsage(session.user.id, size);
+    // 7. AFTER success: deduct credit if quota was exhausted, always record usage
+    if (quotaExhausted) {
+      await deductCredit(userId);
+    }
+    await recordUsage(userId, size);
 
     return NextResponse.json({
       image: `data:image/png;base64,${base64}`,
