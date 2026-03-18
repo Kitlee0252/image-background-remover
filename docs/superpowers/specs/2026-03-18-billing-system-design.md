@@ -16,6 +16,18 @@ Design a hybrid billing system (credits + monthly subscription) for the image ba
 - **Billing Model**: Credits (pay-as-you-go) + Monthly Subscriptions (hybrid)
 - **Payment Gateway**: PayPal.cn
 - **Currency**: USD
+- **Credit model**: Flat 1 credit = 1 image regardless of output quality (supersedes the old 0.25-credit Preview model from remove.bg era)
+
+### Prerequisites
+
+Before implementing the billing system, the following pre-existing issues must be resolved:
+
+1. **Table name mismatch**: Code in `usage.ts` queries `users` (plural) but migration `0002` defines the table as `user` (singular). Must align to `user`.
+2. **Column name mismatch**: Code uses snake_case (`user_id`, `created_at`) but schema defines camelCase (`userId`, `createdAt`). Must align.
+3. **Missing `quality` column**: `recordUsage()` inserts a `quality` value but the `usage` table has no such column. Must add it or remove the insert.
+4. **Missing `plan` column**: `getUserPlan()` queries `SELECT plan FROM user` but the column does not exist yet. Currently falls back to `'free'` silently.
+
+These will be addressed in a prerequisite migration before the billing migration.
 
 ---
 
@@ -95,21 +107,33 @@ All tiers ≥ 70% target ✓
 - Credits are **permanent**, never expire
 - When monthly quota is exhausted, credits are consumed automatically (if available)
 - Subscribers can also purchase credit packs as overflow reserve
-- Overage purchases ($0.12/image Basic, $0.08/image Pro) deduct directly, no credits involved
+- Overage purchases ($0.12/image Basic, $0.08/image Pro) are charged via PayPal as a single transaction when the user confirms. The user sees an "Out of quota" prompt with options: use credits (if available), buy overage images, or buy a credit pack. Overage is not automatic.
+
+**Note on overage vs credits pricing**: Overage per-image cost ($0.08–$0.12) is cheaper than credit packs ($0.20–$0.30). This is intentional — overage is a subscriber-only benefit that rewards commitment. Non-subscribers must use credit packs.
 
 ### 3.5 Feature Privileges
 
-| Feature | Free | Credit User | Basic | Pro |
-|---------|------|-------------|-------|-----|
+"Credit User" is not a separate plan in the database. It is a **derived state**: any Free-plan user who has a `credits.balance > 0` is treated as a Credit User for privilege purposes. If their balance reaches 0, they revert to Free privileges.
+
+| Feature | Free | Credit User (Free + credits > 0) | Basic | Pro |
+|---------|------|----------------------------------|-------|-----|
 | Monthly free quota | 3 | — | 40 | 100 |
 | Upload size | 5MB | 25MB | 25MB | 25MB |
 | Output quality max | HD | HD | Ultra HD | Ultra HD |
 | Batch processing | Single | 10 | 10 | 20 |
-| Overage purchase | ✗ | — | $0.12/ea | $0.08/ea |
+| Overage purchase | ✗ | ✗ | $0.12/ea | $0.08/ea |
+
+**Post-downgrade behavior**: If a subscriber cancels and downgrades to Free, remaining credits are preserved but quality ceiling reverts to HD. Credits purchased during a subscription can still be used, but only at HD or below.
 
 ### 3.6 Credit Consumption Rule
 
 1 credit = 1 image, regardless of output quality. Quality ceiling is determined by user tier, not per-image cost. This keeps UX simple and is possible because PhotoRoom charges a flat $0.02 for all output resolutions.
+
+This supersedes the old remove.bg-era model where Preview cost 0.25 credits and HD cost 1 credit. The project CLAUDE.md must be updated to reflect this change.
+
+### 3.7 Batch Processing vs Concurrency
+
+"Batch processing" limit (10 or 20) refers to **how many files can be uploaded at once**. The actual processing **concurrency stays at 2** (parallel API calls). Uploading 20 files means they are processed 2 at a time, completing in ~10 seconds total. The FAQ should reflect this clearly.
 
 ---
 
@@ -242,28 +266,40 @@ Input: JPG, PNG, WebP. Output: PNG with transparent background.
 Images with no clear foreground subject (solid colors, abstract patterns) may be rejected by our AI. Try a different image with a distinct subject.
 
 **How long does processing take?**
-Typically under 1 second per image. Batch processing runs 2 images in parallel.
+Typically under 1 second per image. Batch uploads are processed 2 at a time, so 10 images take about 5 seconds.
 
 ---
 
 ## 6. Database Schema Changes
 
-### New tables needed
+### Prerequisite migration (fix existing schema)
 
 ```sql
--- Credits balance per user
+-- Fix usage table: align column names to snake_case and add missing quality column
+-- (Exact migration depends on whether D1 supports ALTER TABLE RENAME COLUMN;
+--  if not, recreate the table with correct column names)
+-- Target schema for usage:
+--   id INTEGER PRIMARY KEY AUTOINCREMENT
+--   user_id TEXT NOT NULL REFERENCES user(id)
+--   quality TEXT
+--   created_at INTEGER NOT NULL
+```
+
+### New tables
+
+```sql
+-- Credits balance per user (one row per user, user_id is the PK)
 CREATE TABLE credits (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES user(id),
+  user_id TEXT PRIMARY KEY REFERENCES user(id),
   balance INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL
 );
 
 -- Credit/subscription purchase transactions
 CREATE TABLE transactions (
-  id TEXT PRIMARY KEY,
+  id TEXT PRIMARY KEY,        -- generated via crypto.randomUUID()
   user_id TEXT NOT NULL REFERENCES user(id),
-  type TEXT NOT NULL,          -- 'credit_purchase' | 'subscription' | 'overage' | 'refund'
+  type TEXT NOT NULL,          -- 'credit_purchase' | 'subscription' | 'subscription_renewal' | 'overage' | 'refund'
   amount_usd REAL NOT NULL,    -- charged amount
   credits_added INTEGER,       -- for credit purchases
   plan TEXT,                   -- for subscription changes
@@ -271,6 +307,8 @@ CREATE TABLE transactions (
   status TEXT NOT NULL,        -- 'completed' | 'pending' | 'refunded'
   created_at INTEGER NOT NULL
 );
+
+CREATE INDEX idx_transactions_user_date ON transactions(user_id, created_at DESC);
 ```
 
 ### Existing table modifications
@@ -282,9 +320,9 @@ ALTER TABLE user ADD COLUMN plan_expires_at INTEGER;         -- subscription exp
 ALTER TABLE user ADD COLUMN paypal_email TEXT;
 ```
 
-### Existing table: usage (no changes)
+### PLAN_LIMITS migration
 
-The current `usage` table already tracks per-image processing records. No schema changes needed.
+Update `PLAN_LIMITS` in code from `{ free: 3, pro: 50, unlimited: 999999 }` to `{ free: 3, basic: 40, pro: 100 }`. The `unlimited` tier is removed. If any existing users have `plan = 'unlimited'`, they should be migrated to `'pro'`.
 
 ---
 
@@ -296,6 +334,15 @@ The current `usage` table already tracks per-image processing records. No schema
 - Subscription plans use PayPal Subscriptions API (recurring billing)
 - Credit packs use PayPal Orders API (one-time payment)
 - Webhook endpoint needed for payment confirmations and subscription lifecycle events
+- **Webhook signature verification is mandatory** — all incoming PayPal webhooks must be verified via `PAYPAL-TRANSMISSION-SIG` header to prevent forged payment confirmations
+
+### Subscription Lifecycle
+
+1. **Activation**: PayPal webhook `BILLING.SUBSCRIPTION.ACTIVATED` → set `user.plan` and `plan_expires_at` (1 month from now)
+2. **Renewal**: PayPal webhook `PAYMENT.SALE.COMPLETED` (recurring) → extend `plan_expires_at` by 1 month, insert `subscription_renewal` transaction
+3. **Cancellation**: User clicks Cancel → call PayPal Cancel Subscription API → set `plan_expires_at` to current period end (do NOT downgrade immediately)
+4. **Expiry check**: On every API request, check `plan_expires_at`. If expired and no active PayPal subscription → downgrade `user.plan` to `'free'`. This is a lazy check (no cron needed).
+5. **Grace period**: None. Once `plan_expires_at` passes, the user is treated as Free immediately.
 
 ### API Route Changes
 
@@ -303,13 +350,35 @@ The current `usage` table already tracks per-image processing records. No schema
 - New routes:
   - `POST /api/checkout/credits` — create PayPal order for credit pack
   - `POST /api/checkout/subscribe` — create PayPal subscription
-  - `POST /api/webhooks/paypal` — handle PayPal webhooks
+  - `POST /api/webhooks/paypal` — handle PayPal webhooks (with signature verification)
   - `GET /api/account` — return full account info (plan, credits, usage)
   - `POST /api/account/cancel` — cancel subscription
 
 ### Consumption Priority
 
 When processing an image:
-1. Check monthly quota (if subscribed) → deduct from quota
-2. If quota exhausted → check credits balance → deduct 1 credit
-3. If no credits → return `quota_exceeded` error (or offer overage purchase)
+1. Check `plan_expires_at` — if expired, lazy-downgrade to Free
+2. Check monthly quota (if subscribed) → deduct from quota
+3. If quota exhausted → check `credits.balance` → deduct 1 credit atomically
+4. If no credits → return `quota_exceeded` error with upgrade options
+
+**Atomicity for credit deduction**: Use `UPDATE credits SET balance = balance - 1 WHERE user_id = ? AND balance > 0` and check affected row count. D1 (SQLite) is single-writer, but this pattern is still required to prevent edge cases with concurrent Cloudflare Workers invocations.
+
+### Environment Variables (new)
+
+```
+PHOTOROOM_API_KEY=xxx            # PhotoRoom API key (primary)
+REMOVE_BG_API_KEY=xxx            # remove.bg API key (fallback, existing)
+PAYPAL_CLIENT_ID=xxx             # PayPal REST API client ID
+PAYPAL_CLIENT_SECRET=xxx         # PayPal REST API secret
+PAYPAL_WEBHOOK_ID=xxx            # PayPal webhook ID for signature verification
+```
+
+### CLAUDE.md Updates Required
+
+After implementation, update the project CLAUDE.md to reflect:
+1. PhotoRoom as primary API (remove.bg as fallback)
+2. Flat 1-credit-per-image model (replaces 0.25-credit Preview)
+3. New environment variables
+4. New API routes and `/account` page in project structure
+5. Full billing model description (replaces "免费用户 3 次/月")
