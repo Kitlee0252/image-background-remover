@@ -88,7 +88,10 @@ image-background-remover/           # 项目根目录（也是 git 根目录）
 - **fileInputRef 提升到父组件**：Hero 按钮和 UploadZone 共享同一个 file input ref，实现 CTA 按钮直接触发文件选择。
 - **Auth.js JWT + Drizzle Adapter 混合模式**：JWT 管 session 传输（无需 session 表），Drizzle Adapter 管用户/账户持久化（首次登录写库）。Auth.js 配置使用 lazy initializer `NextAuth(() => {...})`，确保 D1 binding 在请求时才获取。
 - **强制登录**：未登录用户只能看首页 + 登录按钮，不能上传处理。
-- **混合计费模型**：免费用户 3 次/月；付费订阅 Basic ($9.99/mo, 40 次) / Pro ($24.99/mo, 100 次)；一次性信用点包 10/35/100 点。月度配额优先消耗，耗尽后自动使用信用点余额。只有 API 成功返回才扣次数。
+- **混合计费模型**：免费用户 3 次/月；付费订阅 Basic ($9.99/mo, 40 次) / Pro ($24.99/mo, 100 次)；一次性信用点包 10/35/100 点。月度配额优先消耗，耗尽后自动使用信用点余额。只有 API 成功返回才扣次数。信用点在 API 调用成功后才扣减（不是之前）。
+- **API 自动回退**：`PHOTOROOM_API_KEY` 存在时用 PhotoRoom，不存在时自动回退到 `REMOVE_BG_API_KEY`（remove.bg）。无需手动切换。
+- **Plan-aware 限制**：上传大小（Free=5MB, 付费=25MB）、输出质量上限（Free=HD, 订阅=Ultra HD）、批量上传数（Free=1, Basic/Credit=10, Pro=20）均根据用户 plan 动态调整，服务端和客户端同时验证。
+- **Credit User 派生态**：不是独立 plan，是 Free 用户 + credits.balance > 0 的状态。享受付费级别的文件大小和批量限制，但质量上限仍为 HD。
 - **不持久化用户图片**：图片仅在浏览器会话中存在，服务端不落盘。
 
 ## 开发命令
@@ -145,11 +148,20 @@ npx wrangler pages deploy .open-next/assets \
 
 已配置 `.github/workflows/deploy.yml`，但 GitHub 账号因计费问题被锁定（Actions 分钟数耗尽）。需要去 https://github.com/settings/billing 解决。
 
+## 待完成功能（Deferred）
+
+- **PayPal 集成**：支付按钮目前为 stub（alert "Coming Soon"），需要配置 PayPal REST API
+- **Overage 购买**：订阅用户超额单张购买（$0.12/Basic, $0.08/Pro），需 PayPal 先就绪
+- **账号删除**：隐私合规，需实现 API + UI
+- **D1 远程迁移**：部署前需在 Cloudflare D1 执行 0003 + 0004 migration
+
 ## 注意事项
 
 - 隧道测试必须用 production build（`npm run build && npx next start`），dev 模式 HMR WebSocket 会在隧道下失败
-- PhotoRoom（主力）和 remove.bg（备选）均按调用计费，注意 API 用量
+- PhotoRoom（主力 $0.02/张）和 remove.bg（备选 $0.18/张）均按调用计费，注意 API 用量
 - 纯色/无前景的图片可能被 API 拒绝（400 unknown_foreground），这是正常行为
 - Next.js 16 的 TypeScript 类型检查有 bug，已在 `next.config.ts` 中设置 `typescript.ignoreBuildErrors: true`
 - opennextjs-cloudflare 官方警告不完全兼容 Windows，推荐使用 WSL
 - `wrangler.jsonc` 中 `main` 和 `pages_build_output_dir` 不能同时存在
+- D1 migration 需按顺序执行：0001 → 0002 → 0003 → 0004
+- `next start` 模式下 D1 不可用（无 Cloudflare context），本地测试用 `npm run dev`
