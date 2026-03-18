@@ -10,6 +10,20 @@
 
 **Spec:** `docs/superpowers/specs/2026-03-18-billing-system-design.md`
 
+### Critical Implementation Notes
+
+1. **Credit deduction MUST happen after API success** — never deduct before calling PhotoRoom. Failed images must not consume credits (per spec FAQ).
+2. **Migration 0003 is a hard prerequisite** — existing `usage.ts` code (`getMonthlyUsage`, `recordUsage`) uses column names (`user_id`, `created_at`, `quality`) that don't match the current schema (`userId`, `createdAt`, no `quality`). Code works only after migration 0003 recreates the table.
+3. **Store PayPal subscription ID before redirecting to PayPal** — the webhook handler needs it to find the user.
+4. **`process.env` in Cloudflare Workers** — access env vars inside request handlers, not at module top level.
+
+### Deferred to Follow-Up
+
+These spec items are scoped out of this plan to keep MVP manageable:
+- **Overage purchase flow** — subscribers can buy extra images at $0.12/$0.08. Will add after core billing works.
+- **remove.bg fallback** — emergency fallback when PhotoRoom is down. Will add as a config switch.
+- **Account deletion** — UI + API for permanent data removal. Will add in a privacy/compliance pass.
+
 ---
 
 ## File Structure
@@ -767,40 +781,34 @@ import { getEffectivePlan, capQuality, type PlanId } from "@/lib/plans";
   const creditBalance = await getCreditBalance(session.user.id);
   const effectivePlan = getEffectivePlan(plan, creditBalance);
 
-  // --- Quota + credits check ---
+  // --- Quota + credits pre-check (DO NOT deduct yet — deduct after API success) ---
   const { used, limit } = await getMonthlyUsage(session.user.id);
-  let usedCredits = false;
+  const quotaAvailable = used < limit;
 
-  if (used >= limit) {
-    // Quota exhausted — try credits
-    if (creditBalance > 0) {
-      const deducted = await deductCredit(session.user.id);
-      if (!deducted) {
-        return NextResponse.json(
-          { error: "No quota or credits remaining.", code: "quota_exceeded", used, limit },
-          { status: 403 }
-        );
-      }
-      usedCredits = true;
-    } else {
-      return NextResponse.json(
-        { error: `Monthly quota exceeded (${used}/${limit}).`, code: "quota_exceeded", used, limit },
-        { status: 403 }
-      );
+  if (!quotaAvailable && creditBalance <= 0) {
+    return NextResponse.json(
+      { error: `Monthly quota exceeded (${used}/${limit}).`, code: "quota_exceeded", used, limit },
+      { status: 403 }
+    );
+  }
+
+  // Use effectivePlan for file size and quality checks.
+  // IMPORTANT: Remove the inline FILE_SIZE_LIMITS/QUALITY_CEILING constants from Task 3.
+  // Instead use: effectivePlan.maxFileSizeBytes, capQuality(size, effectivePlan)
+
+  // ... (file validation, PhotoRoom API call — same as Task 3) ...
+
+  // === AFTER SUCCESSFUL API RESPONSE ONLY ===
+  // Deduct credits or record quota usage. Never deduct before the API call.
+  if (!quotaAvailable) {
+    // Quota exhausted — deduct 1 credit
+    const deducted = await deductCredit(session.user.id);
+    if (!deducted) {
+      // Race condition edge case — image was already processed, log it
+      console.warn("Credit deduction failed post-processing, user:", session.user.id);
     }
   }
-
-  // Use effectivePlan for file size and quality checks
-  // ... (rest of route uses effectivePlan.maxFileSizeBytes, capQuality, etc.)
-
-  // After successful processing:
-  if (!usedCredits) {
-    await recordUsage(session.user.id, size);
-  }
-  // If usedCredits, credit was already deducted above — just record usage for history
-  if (usedCredits) {
-    await recordUsage(session.user.id, size);
-  }
+  await recordUsage(session.user.id, size); // Always record for history
 ```
 
 - [ ] **Step 3: Test the full flow locally**
@@ -841,6 +849,8 @@ interface CloudflareEnv {
   PAYPAL_CLIENT_ID: string;
   PAYPAL_CLIENT_SECRET: string;
   PAYPAL_WEBHOOK_ID: string;
+  PAYPAL_PLAN_ID_BASIC: string;
+  PAYPAL_PLAN_ID_PRO: string;
 }
 ```
 
@@ -854,9 +864,13 @@ Create `src/lib/paypal.ts`:
  * Docs: https://developer.paypal.com/docs/api/
  */
 
-const PAYPAL_BASE = process.env.NODE_ENV === "production"
-  ? "https://api-m.paypal.com"
-  : "https://api-m.sandbox.paypal.com";
+// Note: Do NOT use process.env at module top level in Cloudflare Workers.
+// Access it inside functions only.
+function getPayPalBase(): string {
+  return process.env.NODE_ENV === "production"
+    ? "https://api-m.paypal.com"
+    : "https://api-m.sandbox.paypal.com";
+}
 
 /**
  * Get an access token using client credentials.
@@ -867,7 +881,7 @@ async function getAccessToken(): Promise<string> {
   if (!clientId || !clientSecret) throw new Error("PayPal credentials not configured");
 
   const auth = btoa(`${clientId}:${clientSecret}`);
-  const res = await fetch(`${PAYPAL_BASE}/v1/oauth2/token`, {
+  const res = await fetch(`${getPayPalBase()}/v1/oauth2/token`, {
     method: "POST",
     headers: {
       Authorization: `Basic ${auth}`,
@@ -889,7 +903,7 @@ export async function createOrder(amountUsd: string, description: string): Promi
   approveUrl: string;
 }> {
   const token = await getAccessToken();
-  const res = await fetch(`${PAYPAL_BASE}/v2/checkout/orders`, {
+  const res = await fetch(`${getPayPalBase()}/v2/checkout/orders`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -929,7 +943,7 @@ export async function captureOrder(orderId: string): Promise<{
   payerEmail: string;
 }> {
   const token = await getAccessToken();
-  const res = await fetch(`${PAYPAL_BASE}/v2/checkout/orders/${orderId}/capture`, {
+  const res = await fetch(`${getPayPalBase()}/v2/checkout/orders/${orderId}/capture`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -959,7 +973,7 @@ export async function createSubscription(planId: string, returnUrl: string, canc
   approveUrl: string;
 }> {
   const token = await getAccessToken();
-  const res = await fetch(`${PAYPAL_BASE}/v1/billing/subscriptions`, {
+  const res = await fetch(`${getPayPalBase()}/v1/billing/subscriptions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -991,7 +1005,7 @@ export async function createSubscription(planId: string, returnUrl: string, canc
  */
 export async function cancelSubscription(subscriptionId: string, reason: string): Promise<void> {
   const token = await getAccessToken();
-  const res = await fetch(`${PAYPAL_BASE}/v1/billing/subscriptions/${subscriptionId}/cancel`, {
+  const res = await fetch(`${getPayPalBase()}/v1/billing/subscriptions/${subscriptionId}/cancel`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1018,7 +1032,7 @@ export async function verifyWebhookSignature(
   if (!webhookId) throw new Error("PAYPAL_WEBHOOK_ID not configured");
 
   const token = await getAccessToken();
-  const res = await fetch(`${PAYPAL_BASE}/v1/notifications/verify-webhook-signature`, {
+  const res = await fetch(`${getPayPalBase()}/v1/notifications/verify-webhook-signature`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1114,11 +1128,19 @@ Create `app/api/checkout/capture/route.ts`:
 
 ```typescript
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "../../../../auth";
 import { captureOrder } from "@/lib/paypal";
 import { addCredits, recordTransaction } from "@/lib/credits";
+import { CREDIT_PACKS } from "@/lib/plans";
 import { getD1 } from "@/lib/db";
 
 export async function GET(request: NextRequest) {
+  // Verify authenticated session — prevent cookie tampering
+  const session = await auth();
+  if (!session?.user?.id) {
+    return NextResponse.redirect(new URL("/?error=auth_required", request.url));
+  }
+
   const token = request.nextUrl.searchParams.get("token"); // PayPal order ID
   const orderCookie = request.cookies.get("paypal_order")?.value;
 
@@ -1133,22 +1155,24 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL("/account?error=invalid_order", request.url));
   }
 
-  if (orderMeta.orderId !== token) {
+  // Security: verify the cookie's userId matches the authenticated session
+  if (orderMeta.orderId !== token || orderMeta.userId !== session.user.id) {
     return NextResponse.redirect(new URL("/account?error=order_mismatch", request.url));
   }
 
   try {
     const result = await captureOrder(token);
+    const pack = CREDIT_PACKS.find((p) => p.id === orderMeta.packId);
 
     if (result.status === "COMPLETED") {
       // Add credits
       await addCredits(orderMeta.userId, orderMeta.credits);
 
-      // Record transaction
+      // Record transaction with actual amount
       await recordTransaction({
         userId: orderMeta.userId,
         type: "credit_purchase",
-        amountUsd: 0, // Will be looked up from CREDIT_PACKS in a real impl
+        amountUsd: pack?.priceUsd ?? 0,
         creditsAdded: orderMeta.credits,
         paypalTransactionId: result.transactionId,
         status: "completed",
@@ -1225,6 +1249,13 @@ export async function POST(request: NextRequest) {
       `${baseUrl}/account?tab=plans&success=subscription`,
       `${baseUrl}/account?tab=plans`
     );
+
+    // Store subscriptionId on user row BEFORE redirect — webhook handler needs this to find the user
+    const db = (await import("@/lib/db")).getD1();
+    await db
+      .prepare("UPDATE user SET paypal_subscription_id = ? WHERE id = ?")
+      .bind(subscriptionId, session.user.id)
+      .run();
 
     return NextResponse.json({ approveUrl, subscriptionId });
   } catch (error) {
@@ -1481,25 +1512,30 @@ git commit -m "feat: PayPal webhook handler — subscription lifecycle + idempot
 Create `app/api/account/route.ts`:
 
 ```typescript
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { auth } from "../../../auth";
 import { checkPlanExpiry, getMonthlyUsage } from "@/lib/usage";
 import { getCreditBalance, getTransactions } from "@/lib/credits";
 import { getEffectivePlan, PLANS, CREDIT_PACKS, type PlanId } from "@/lib/plans";
 import { getD1 } from "@/lib/db";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const session = await auth();
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const userId = session.user.id;
+
+  // Support pagination for transaction history
+  const txLimit = parseInt(request.nextUrl.searchParams.get("transactions_limit") || "5");
+  const txOffset = parseInt(request.nextUrl.searchParams.get("transactions_offset") || "0");
+
   const plan = await checkPlanExpiry(userId) as PlanId;
   const creditBalance = await getCreditBalance(userId);
   const effectivePlan = getEffectivePlan(plan, creditBalance);
   const { used, limit } = await getMonthlyUsage(userId);
-  const recentTransactions = await getTransactions(userId, 5);
+  const recentTransactions = await getTransactions(userId, txLimit, txOffset);
 
   // Get user details
   const db = getD1();
