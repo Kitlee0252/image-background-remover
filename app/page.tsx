@@ -16,8 +16,8 @@ import {
   FileItem,
   QualitySize,
   AppPhase,
-  MAX_FILES,
-  MAX_FILE_SIZE,
+  DEFAULT_MAX_FILES,
+  DEFAULT_MAX_FILE_SIZE,
   ALLOWED_TYPES,
 } from "@/types";
 
@@ -61,8 +61,8 @@ export default function Home() {
           errors.push(`${file.name}: unsupported format`);
           continue;
         }
-        if (file.size > MAX_FILE_SIZE) {
-          errors.push(`${file.name}: exceeds 10MB`);
+        if (file.size > DEFAULT_MAX_FILE_SIZE) {
+          errors.push(`${file.name}: exceeds ${Math.round(DEFAULT_MAX_FILE_SIZE / (1024 * 1024))}MB`);
           continue;
         }
         validItems.push({
@@ -85,13 +85,13 @@ export default function Home() {
 
       setFiles((prev) => {
         const combined = [...prev, ...validItems];
-        if (combined.length > MAX_FILES) {
+        if (combined.length > DEFAULT_MAX_FILES) {
           setErrorMessage(
             (e) =>
               (e ? e + "; " : "") +
-              `Max ${MAX_FILES} images. ${combined.length - MAX_FILES} skipped.`
+              `Max ${DEFAULT_MAX_FILES} images. ${combined.length - DEFAULT_MAX_FILES} skipped.`
           );
-          return combined.slice(0, MAX_FILES);
+          return combined.slice(0, DEFAULT_MAX_FILES);
         }
         return combined;
       });

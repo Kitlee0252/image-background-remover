@@ -1,13 +1,21 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import { DEFAULT_MAX_FILES, DEFAULT_MAX_FILE_SIZE } from "@/types";
 
 interface UploadZoneProps {
   onFilesSelect: (files: File[]) => void;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
+  maxFiles?: number;
+  maxFileSize?: number;
 }
 
-export default function UploadZone({ onFilesSelect, fileInputRef }: UploadZoneProps) {
+export default function UploadZone({
+  onFilesSelect,
+  fileInputRef,
+  maxFiles = DEFAULT_MAX_FILES,
+  maxFileSize = DEFAULT_MAX_FILE_SIZE,
+}: UploadZoneProps) {
   const [isDragging, setIsDragging] = useState(false);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -46,6 +54,8 @@ export default function UploadZone({ onFilesSelect, fileInputRef }: UploadZonePr
     e.target.value = "";
   };
 
+  const sizeMB = Math.round(maxFileSize / (1024 * 1024));
+
   return (
     <div
       role="button"
@@ -65,17 +75,17 @@ export default function UploadZone({ onFilesSelect, fileInputRef }: UploadZonePr
         ref={fileInputRef}
         type="file"
         accept="image/jpeg,image/png,image/webp"
-        multiple
+        multiple={maxFiles > 1}
         onChange={handleChange}
         className="hidden"
       />
       <div className="space-y-3 pointer-events-none">
         <div className="text-5xl text-gray-400">+</div>
         <p className="text-lg font-medium text-gray-700">
-          Click or drag images here
+          Click or drag {maxFiles > 1 ? "images" : "an image"} here
         </p>
         <p className="text-sm text-gray-500">
-          Supports JPG, PNG, WebP &middot; Max 10MB each &middot; Up to 10 images
+          Supports JPG, PNG, WebP &middot; Max {sizeMB}MB each{maxFiles > 1 ? ` \u00B7 Up to ${maxFiles} images` : ""}
         </p>
         <p className="text-xs text-gray-400">
           We do not store your images.

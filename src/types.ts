@@ -24,6 +24,7 @@ export const QUALITY_OPTIONS: {
   { value: "full", label: "Ultra HD", description: "Up to 36 MP" },
 ];
 
-export const MAX_FILES = 10;
-export const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+// Free-plan defaults; paid limits come from src/lib/plans.ts (getEffectivePlan)
+export const DEFAULT_MAX_FILES = 1;
+export const DEFAULT_MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 export const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
