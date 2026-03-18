@@ -43,7 +43,12 @@ export async function POST(request: NextRequest) {
   // 4. Compute effective plan (free+credits gets upgraded limits)
   const effectivePlan = getEffectivePlan(plan, creditBalance);
 
-  const apiKey = process.env.PHOTOROOM_API_KEY;
+  // Pick API: prefer PhotoRoom, fall back to remove.bg
+  const photoroomKey = process.env.PHOTOROOM_API_KEY;
+  const removebgKey = process.env.REMOVE_BG_API_KEY;
+  const usePhotoRoom = !!photoroomKey;
+  const apiKey = photoroomKey || removebgKey;
+
   if (!apiKey) {
     return NextResponse.json(
       { error: "Service is not configured." },
@@ -85,19 +90,49 @@ export async function POST(request: NextRequest) {
     const arrayBuffer = await file.arrayBuffer();
     const blob = new Blob([arrayBuffer], { type: file.type });
 
-    const result = await removeBackground(apiKey, blob, file.name || "image.png", size);
+    let base64: string;
 
-    if (!result.ok) {
-      console.error("PhotoRoom API error:", result.status, result.message);
-      return NextResponse.json({ error: result.message }, { status: 502 });
+    if (usePhotoRoom) {
+      // PhotoRoom API
+      const result = await removeBackground(apiKey, blob, file.name || "image.png", size);
+      if (!result.ok) {
+        console.error("PhotoRoom API error:", result.status, result.message);
+        return NextResponse.json({ error: result.message }, { status: 502 });
+      }
+      const bytes = new Uint8Array(result.imageBuffer);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      base64 = btoa(binary);
+    } else {
+      // remove.bg fallback
+      const apiFormData = new FormData();
+      apiFormData.append("image_file", blob, file.name || "image.png");
+      apiFormData.append("size", size);
+      const response = await fetch("https://api.remove.bg/v1.0/removebg", {
+        method: "POST",
+        headers: { "X-Api-Key": apiKey },
+        body: apiFormData,
+      });
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "");
+        console.error("remove.bg API error:", response.status, errorText);
+        let detail = "Failed to remove background.";
+        try {
+          const errorData = JSON.parse(errorText);
+          if (errorData.errors?.[0]?.title) detail = errorData.errors[0].title;
+        } catch {}
+        return NextResponse.json({ error: detail }, { status: 502 });
+      }
+      const resultBuffer = await response.arrayBuffer();
+      const bytes = new Uint8Array(resultBuffer);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      base64 = btoa(binary);
     }
-
-    const bytes = new Uint8Array(result.imageBuffer);
-    let binary = "";
-    for (let i = 0; i < bytes.length; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    const base64 = btoa(binary);
 
     // 7. AFTER success: deduct credit if quota was exhausted, always record usage
     if (quotaExhausted) {
