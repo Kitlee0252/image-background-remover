@@ -22,12 +22,12 @@ Design a hybrid billing system (credits + monthly subscription) for the image ba
 
 Before implementing the billing system, the following pre-existing issues must be resolved:
 
-1. **Table name mismatch**: Code in `usage.ts` queries `users` (plural) but migration `0002` defines the table as `user` (singular). Must align to `user`.
-2. **Column name mismatch**: Code uses snake_case (`user_id`, `created_at`) but schema defines camelCase (`userId`, `createdAt`). Must align.
-3. **Missing `quality` column**: `recordUsage()` inserts a `quality` value but the `usage` table has no such column. Must add it or remove the insert.
+1. **Table name mismatch**: `getUserPlan()` in `usage.ts` line 16 queries `SELECT plan FROM users` (plural) but migration `0002` defines the table as `user` (singular). Fix: change the SQL in `usage.ts` to reference `user`.
+2. **Column name mismatch**: Code uses snake_case (`user_id`, `created_at`) but schema defines camelCase (`userId`, `createdAt`). Must align to snake_case.
+3. **Missing `quality` column**: `recordUsage()` inserts a `quality` value but the `usage` table has no such column. Must add it.
 4. **Missing `plan` column**: `getUserPlan()` queries `SELECT plan FROM user` but the column does not exist yet. Currently falls back to `'free'` silently.
 
-These will be addressed in a prerequisite migration before the billing migration.
+These will be addressed in a prerequisite migration before the billing migration. The app is **pre-launch with no production user data**, so table recreation (drop + create) is safe — no data migration needed.
 
 ---
 
@@ -52,7 +52,7 @@ PhotoRoom provides a **remove.bg compatibility mode**. Migration requires only:
 2. API key header: `X-Api-Key` (same pattern)
 3. Response handling: PhotoRoom returns binary image (current codebase already has base64 conversion layer, minor adaptation needed)
 
-Parameter names are intentionally compatible — no other code changes needed.
+Parameter names are intentionally compatible. PhotoRoom accepts the same `size` values: `preview`, `medium` (maps to remove.bg `auto`), `hd`, `full`. The only difference is `auto` → `medium` naming — add a mapping in the API route.
 
 ### Fallback Strategy
 
@@ -309,6 +309,7 @@ CREATE TABLE transactions (
 );
 
 CREATE INDEX idx_transactions_user_date ON transactions(user_id, created_at DESC);
+CREATE INDEX idx_transactions_paypal_id ON transactions(paypal_transaction_id);
 ```
 
 ### Existing table modifications
@@ -335,6 +336,7 @@ Update `PLAN_LIMITS` in code from `{ free: 3, pro: 50, unlimited: 999999 }` to `
 - Credit packs use PayPal Orders API (one-time payment)
 - Webhook endpoint needed for payment confirmations and subscription lifecycle events
 - **Webhook signature verification is mandatory** — all incoming PayPal webhooks must be verified via `PAYPAL-TRANSMISSION-SIG` header to prevent forged payment confirmations
+- **Webhook idempotency** — check `paypal_transaction_id` for duplicates before crediting a user. PayPal can deliver the same webhook event multiple times; always deduplicate to prevent double-crediting
 
 ### Subscription Lifecycle
 
@@ -346,7 +348,7 @@ Update `PLAN_LIMITS` in code from `{ free: 3, pro: 50, unlimited: 999999 }` to `
 
 ### API Route Changes
 
-- `/api/remove-background/route.ts`: Add credit deduction logic, check both quota and credits
+- `/api/remove-background/route.ts`: Add credit deduction logic, check both quota and credits. Also: `MAX_FILE_SIZE` (currently hardcoded 10MB in both `src/types.ts` and this route) and `MAX_FILES` (hardcoded 10 in `src/types.ts`) must become **plan-aware** — server validates against user's plan limit, client fetches these limits from the session/account API
 - New routes:
   - `POST /api/checkout/credits` — create PayPal order for credit pack
   - `POST /api/checkout/subscribe` — create PayPal subscription
