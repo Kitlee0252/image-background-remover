@@ -53,7 +53,7 @@ export default function TransactionHistory({
       const res = await fetch(
         `/api/account?transactions_offset=${offset}&transactions_limit=10`
       );
-      const data = await res.json();
+      const data: any = await res.json();
       const newTx: Transaction[] = data.recentTransactions ?? [];
       if (newTx.length < 10) {
         setHasMore(false);

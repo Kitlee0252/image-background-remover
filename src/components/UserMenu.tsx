@@ -21,7 +21,7 @@ export default function UserMenu() {
     if (open && !account) {
       fetch("/api/account")
         .then((r) => r.json())
-        .then((data) => {
+        .then((data: any) => {
           setAccount({
             used: data.usage?.used ?? 0,
             limit: data.usage?.limit ?? 3,
