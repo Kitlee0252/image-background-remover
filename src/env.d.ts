@@ -8,6 +8,8 @@ declare global {
     AUTH_SECRET: string;
     AUTH_GOOGLE_ID: string;
     AUTH_GOOGLE_SECRET: string;
+    PHOTOROOM_API_KEY: string;
+    REMOVE_BG_API_KEY?: string; // fallback, optional
   }
 }
 
