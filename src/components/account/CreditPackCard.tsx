@@ -1,15 +1,19 @@
 "use client";
 
+import { useState } from "react";
+import { PayPalButtons } from "@paypal/react-paypal-js";
 import type { CreditPack } from "@/lib/plans";
 
 interface CreditPackCardProps {
   pack: CreditPack;
+  onSuccess?: () => void;
 }
 
-export default function CreditPackCard({ pack }: CreditPackCardProps) {
-  const handleBuy = () => {
-    alert("PayPal integration coming soon!");
-  };
+type Status = "idle" | "processing" | "success" | "error";
+
+export default function CreditPackCard({ pack, onSuccess }: CreditPackCardProps) {
+  const [status, setStatus] = useState<Status>("idle");
+  const [errorMsg, setErrorMsg] = useState<string>("");
 
   return (
     <div className="rounded-xl border border-gray-100 shadow-sm p-6 flex flex-col">
@@ -73,12 +77,66 @@ export default function CreditPackCard({ pack }: CreditPackCardProps) {
         </p>
       </div>
 
-      <button
-        onClick={handleBuy}
-        className="w-full py-2.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors cursor-pointer"
-      >
-        Buy Credits
-      </button>
+      {status === "success" ? (
+        <div className="w-full py-2.5 text-sm font-medium text-center text-green-700 bg-green-50 rounded-lg">
+          +{pack.credits} credits added!
+        </div>
+      ) : status === "error" ? (
+        <div className="w-full py-2 text-sm text-red-600 bg-red-50 rounded-lg text-center px-2">
+          {errorMsg || "Payment failed. Please try again."}
+        </div>
+      ) : (
+        <PayPalButtons
+          style={{
+            layout: "horizontal",
+            color: "blue",
+            shape: "rect",
+            label: "pay",
+            height: 40,
+            tagline: false,
+          }}
+          disabled={status === "processing"}
+          createOrder={async () => {
+            setStatus("processing");
+            const res = await fetch("/api/paypal/create-order", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ packId: pack.id }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+              setStatus("error");
+              setErrorMsg(data.error || "Failed to create order.");
+              throw new Error(data.error);
+            }
+            return data.orderId;
+          }}
+          onApprove={async (data) => {
+            setStatus("processing");
+            const res = await fetch("/api/paypal/capture-order", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ orderId: data.orderID, packId: pack.id }),
+            });
+            const result = await res.json();
+            if (!res.ok) {
+              setStatus("error");
+              setErrorMsg(result.error || "Payment capture failed.");
+              return;
+            }
+            setStatus("success");
+            onSuccess?.();
+          }}
+          onCancel={() => {
+            setStatus("idle");
+          }}
+          onError={(err) => {
+            setStatus("error");
+            setErrorMsg("An error occurred during payment.");
+            console.error("PayPal error:", err);
+          }}
+        />
+      )}
     </div>
   );
 }

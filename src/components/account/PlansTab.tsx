@@ -10,12 +10,14 @@ interface PlansTabProps {
   currentPlan: string;
   plans: Record<string, PlanConfig>;
   creditPacks: CreditPack[];
+  onRefresh?: () => void;
 }
 
 export default function PlansTab({
   currentPlan,
   plans,
   creditPacks,
+  onRefresh,
 }: PlansTabProps) {
   const currentIndex = PLAN_ORDER.indexOf(currentPlan as PlanId);
 
@@ -39,6 +41,7 @@ export default function PlansTab({
                 plan={plan}
                 isCurrent={planId === currentPlan}
                 isDowngrade={idx < currentIndex}
+                onSuccess={onRefresh}
               />
             );
           })}
@@ -56,7 +59,7 @@ export default function PlansTab({
         </p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
           {creditPacks.map((pack) => (
-            <CreditPackCard key={pack.id} pack={pack} />
+            <CreditPackCard key={pack.id} pack={pack} onSuccess={onRefresh} />
           ))}
         </div>
       </section>
