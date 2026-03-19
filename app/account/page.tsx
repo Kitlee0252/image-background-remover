@@ -4,6 +4,7 @@ import { Suspense } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState, useEffect, useCallback } from "react";
+import { PayPalScriptProvider } from "@paypal/react-paypal-js";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import OverviewTab from "@/components/account/OverviewTab";
@@ -28,6 +29,7 @@ interface AccountData {
     planExpiresAt: number | null;
     paypalEmail: string | null;
     paypalSubscriptionId: string | null;
+    subscriptionStatus: string;
   };
   recentTransactions: any[];
   plans: any;
@@ -67,6 +69,13 @@ function AccountContent() {
         .catch(() => setLoading(false));
     }
   }, [status, router]);
+
+  const refreshAccount = useCallback(() => {
+    fetch("/api/account")
+      .then((r) => r.json() as Promise<AccountData>)
+      .then((data) => setAccountData(data))
+      .catch(console.error);
+  }, []);
 
   if (status === "loading" || loading) {
     return (
@@ -115,11 +124,13 @@ function AccountContent() {
           currentPlan={accountData.plan}
           plans={accountData.plans}
           creditPacks={accountData.creditPacks}
+          onRefresh={refreshAccount}
         />
       )}
       {activeTab === "billing" && (
         <BillingTab
           accountData={accountData}
+          onRefresh={refreshAccount}
         />
       )}
     </div>
@@ -128,20 +139,29 @@ function AccountContent() {
 
 export default function AccountPage() {
   return (
-    <div className="min-h-screen flex flex-col bg-white">
-      <Header />
-      <main className="flex-1">
-        <Suspense
-          fallback={
-            <div className="flex items-center justify-center py-32">
-              <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-200 border-t-indigo-500" />
-            </div>
-          }
-        >
-          <AccountContent />
-        </Suspense>
-      </main>
-      <Footer />
-    </div>
+    <PayPalScriptProvider
+      options={{
+        clientId: process.env.NEXT_PUBLIC_PAYPAL_CLIENT_ID || "",
+        currency: "USD",
+        intent: "capture",
+        vault: true,
+      }}
+    >
+      <div className="min-h-screen flex flex-col bg-white">
+        <Header />
+        <main className="flex-1">
+          <Suspense
+            fallback={
+              <div className="flex items-center justify-center py-32">
+                <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-200 border-t-indigo-500" />
+              </div>
+            }
+          >
+            <AccountContent />
+          </Suspense>
+        </main>
+        <Footer />
+      </div>
+    </PayPalScriptProvider>
   );
 }
