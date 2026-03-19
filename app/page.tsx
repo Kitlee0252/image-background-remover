@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useMemo } from "react";
+import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { useSession, signIn } from "next-auth/react";
 import Header from "@/components/Header";
 import Hero from "@/components/Hero";
@@ -29,8 +29,25 @@ export default function Home() {
   const [globalQuality, setGlobalQuality] = useState<QualitySize>("auto");
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [quotaExceeded, setQuotaExceeded] = useState<{used: number; limit: number} | null>(null);
+  const [maxFileSize, setMaxFileSize] = useState(DEFAULT_MAX_FILE_SIZE);
+  const [maxFiles, setMaxFiles] = useState(DEFAULT_MAX_FILES);
   const uploadRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Fetch effective plan limits when authenticated
+  useEffect(() => {
+    if (authStatus === "authenticated") {
+      fetch("/api/account")
+        .then((r) => r.json() as Promise<{ effectivePlan: { maxFileSizeBytes: number; maxBatchFiles: number } }>)
+        .then((data) => {
+          if (data.effectivePlan) {
+            setMaxFileSize(data.effectivePlan.maxFileSizeBytes);
+            setMaxFiles(data.effectivePlan.maxBatchFiles);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [authStatus]);
 
   // Derived phase from files array
   const phase: AppPhase = useMemo(() => {
@@ -61,8 +78,8 @@ export default function Home() {
           errors.push(`${file.name}: unsupported format`);
           continue;
         }
-        if (file.size > DEFAULT_MAX_FILE_SIZE) {
-          errors.push(`${file.name}: exceeds ${Math.round(DEFAULT_MAX_FILE_SIZE / (1024 * 1024))}MB`);
+        if (file.size > maxFileSize) {
+          errors.push(`${file.name}: exceeds ${Math.round(maxFileSize / (1024 * 1024))}MB`);
           continue;
         }
         validItems.push({
@@ -85,18 +102,18 @@ export default function Home() {
 
       setFiles((prev) => {
         const combined = [...prev, ...validItems];
-        if (combined.length > DEFAULT_MAX_FILES) {
+        if (combined.length > maxFiles) {
           setErrorMessage(
             (e) =>
               (e ? e + "; " : "") +
-              `Max ${DEFAULT_MAX_FILES} images. ${combined.length - DEFAULT_MAX_FILES} skipped.`
+              `Max ${maxFiles} images. ${combined.length - maxFiles} skipped.`
           );
-          return combined.slice(0, DEFAULT_MAX_FILES);
+          return combined.slice(0, maxFiles);
         }
         return combined;
       });
     },
-    [globalQuality]
+    [globalQuality, maxFileSize, maxFiles]
   );
 
   const updateFile = useCallback(
@@ -291,6 +308,8 @@ export default function Home() {
                   <UploadZone
                     onFilesSelect={handleFilesSelect}
                     fileInputRef={fileInputRef}
+                    maxFiles={maxFiles}
+                    maxFileSize={maxFileSize}
                   />
                   {errorMessage && (
                     <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-center text-sm">
