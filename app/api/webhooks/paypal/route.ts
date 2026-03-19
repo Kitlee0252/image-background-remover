@@ -177,8 +177,72 @@ export async function POST(req: NextRequest) {
         break;
       }
 
+      // -----------------------------------------------------------------------
+      // Payment sale completed — production PayPal uses this for subscription
+      // recurring payments instead of BILLING.SUBSCRIPTION.PAYMENT.COMPLETED
+      // -----------------------------------------------------------------------
+      case "PAYMENT.SALE.COMPLETED": {
+        const subId: string = event.resource?.billing_agreement_id;
+        const paypalTxId: string = event.resource?.id;
+        const amountStr: string =
+          event.resource?.amount?.total ??
+          event.resource?.amount?.value ??
+          "0";
+        const amountUsd = parseFloat(amountStr) || 0;
+
+        if (!subId) {
+          // Not a subscription payment — could be a one-time sale, ignore
+          console.log("[PayPal Webhook] SALE.COMPLETED: no billing_agreement_id — not a subscription payment, skipping");
+          break;
+        }
+
+        const db5 = getD1();
+
+        const userRow5 = await db5
+          .prepare(
+            "SELECT id, subscription_status FROM user WHERE paypal_subscription_id = ?"
+          )
+          .bind(subId)
+          .first<{ id: string; subscription_status: string | null }>();
+
+        if (!userRow5) {
+          console.warn(`[PayPal Webhook] SALE.COMPLETED: no user found for subscription ${subId}`);
+          break;
+        }
+
+        if (userRow5.subscription_status === "cancelled") {
+          console.log(`[PayPal Webhook] SALE.COMPLETED: subscription ${subId} is cancelled — skipping`);
+          break;
+        }
+
+        const expiresAt5 = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
+        await db5
+          .prepare("UPDATE user SET plan_expires_at = ? WHERE paypal_subscription_id = ?")
+          .bind(expiresAt5, subId)
+          .run();
+
+        try {
+          await recordTransaction({
+            userId: userRow5.id,
+            type: "subscription_renewal",
+            amountUsd,
+            paypalTransactionId: paypalTxId,
+            status: "completed",
+          });
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.toLowerCase().includes("unique") || msg.toLowerCase().includes("constraint")) {
+            console.log(`[PayPal Webhook] SALE.COMPLETED: duplicate transaction ${paypalTxId} — skipping`);
+          } else {
+            console.error(`[PayPal Webhook] SALE.COMPLETED: recordTransaction error:`, err);
+          }
+        }
+
+        console.log(`[PayPal Webhook] SALE.COMPLETED: user ${userRow5.id} plan extended to ${expiresAt5}`);
+        break;
+      }
+
       default:
-        // Unhandled event type — ignore silently.
         console.log(`[PayPal Webhook] Unhandled event type: ${event.event_type}`);
         break;
     }
