@@ -43,11 +43,16 @@ export async function POST(request: NextRequest) {
   // 4. Compute effective plan (free+credits gets upgraded limits)
   const effectivePlan = getEffectivePlan(plan, creditBalance);
 
-  // Pick API: prefer PhotoRoom, fall back to remove.bg
-  const photoroomKey = process.env.PHOTOROOM_API_KEY;
+  // Pick API: prefer PhotoRoom (round-robin if multiple keys), fall back to remove.bg
+  const photoroomKeys = [
+    process.env.PHOTOROOM_API_KEY,
+    process.env.PHOTOROOM_API_KEY_2,
+  ].filter(Boolean) as string[];
   const removebgKey = process.env.REMOVE_BG_API_KEY;
-  const usePhotoRoom = !!photoroomKey;
-  const apiKey = photoroomKey || removebgKey;
+  const usePhotoRoom = photoroomKeys.length > 0;
+  const apiKey = usePhotoRoom
+    ? photoroomKeys[Math.floor(Math.random() * photoroomKeys.length)]
+    : removebgKey;
 
   if (!apiKey) {
     return NextResponse.json(
