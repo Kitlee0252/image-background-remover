@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
   let planId: string;
   let subscriptionId: string | undefined;
   try {
-    const body = await req.json();
+    const body = await req.json() as { planId: string; subscriptionId?: string };
     planId = body.planId;
     subscriptionId = body.subscriptionId;
   } catch {

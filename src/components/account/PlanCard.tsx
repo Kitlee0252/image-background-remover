@@ -135,7 +135,7 @@ export default function PlanCard({ plan, isCurrent, isDowngrade, onSuccess }: Pl
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ planId: plan.id }),
             });
-            const result = await res.json();
+            const result = await res.json() as any;
             if (!res.ok) {
               setStatus("error");
               setErrorMsg(result.error || "Failed to create subscription.");
@@ -153,7 +153,7 @@ export default function PlanCard({ plan, isCurrent, isDowngrade, onSuccess }: Pl
                 subscriptionId: data.subscriptionID,
               }),
             });
-            const result = await res.json();
+            const result = await res.json() as any;
             if (!res.ok) {
               setStatus("error");
               setErrorMsg(result.error || "Failed to activate subscription.");

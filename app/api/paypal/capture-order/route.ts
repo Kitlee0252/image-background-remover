@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
   let orderId: string;
   let packId: string;
   try {
-    const body = await req.json();
+    const body = await req.json() as { orderId: string; packId: string };
     orderId = body.orderId;
     packId = body.packId;
   } catch {

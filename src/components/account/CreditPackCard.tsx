@@ -103,7 +103,7 @@ export default function CreditPackCard({ pack, onSuccess }: CreditPackCardProps)
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ packId: pack.id }),
             });
-            const data = await res.json();
+            const data = await res.json() as any;
             if (!res.ok) {
               setStatus("error");
               setErrorMsg(data.error || "Failed to create order.");
@@ -118,7 +118,7 @@ export default function CreditPackCard({ pack, onSuccess }: CreditPackCardProps)
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ orderId: data.orderID, packId: pack.id }),
             });
-            const result = await res.json();
+            const result = await res.json() as any;
             if (!res.ok) {
               setStatus("error");
               setErrorMsg(result.error || "Payment capture failed.");

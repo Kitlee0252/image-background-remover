@@ -55,7 +55,7 @@ export default function BillingTab({ accountData, onRefresh }: BillingTabProps) 
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
-      const data = await res.json();
+      const data = await res.json() as { error?: string };
       if (!res.ok) {
         setCancelMessage(data.error || "Failed to cancel subscription. Please try again.");
       } else {

@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
 
   let packId: string;
   try {
-    const body = await req.json();
+    const body = await req.json() as { packId: string };
     packId = body.packId;
   } catch {
     return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
