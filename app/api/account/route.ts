@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
     getTransactions(userId, transactionsLimit, transactionsOffset),
     getD1()
       .prepare(
-        "SELECT plan, plan_expires_at, paypal_email, paypal_subscription_id FROM user WHERE id = ?"
+        "SELECT plan, plan_expires_at, paypal_email, paypal_subscription_id, subscription_status FROM user WHERE id = ?"
       )
       .bind(userId)
       .first<{
@@ -44,6 +44,7 @@ export async function GET(req: NextRequest) {
         plan_expires_at: number | null;
         paypal_email: string | null;
         paypal_subscription_id: string | null;
+        subscription_status: string | null;
       }>(),
   ]);
 
@@ -64,6 +65,7 @@ export async function GET(req: NextRequest) {
       planExpiresAt: userRow?.plan_expires_at ?? null,
       paypalEmail: userRow?.paypal_email ?? null,
       paypalSubscriptionId: userRow?.paypal_subscription_id ?? null,
+      subscriptionStatus: userRow?.subscription_status ?? "none",
     },
     recentTransactions,
     plans: PLANS,
