@@ -10,7 +10,8 @@
  *   PAYPAL_MODE   (optional, defaults to "sandbox"; set to "live" for production)
  */
 
-import "dotenv/config";
+import { config } from "dotenv";
+config({ path: ".env.local" });
 
 // ---------------------------------------------------------------------------
 // Config
