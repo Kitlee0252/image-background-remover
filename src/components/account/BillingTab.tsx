@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import TransactionHistory from "./TransactionHistory";
 
@@ -10,6 +11,7 @@ interface AccountData {
     planExpiresAt: number | null;
     paypalEmail: string | null;
     paypalSubscriptionId: string | null;
+    subscriptionStatus: string;
   };
   recentTransactions: Array<{
     id: string;
@@ -24,6 +26,7 @@ interface AccountData {
 
 interface BillingTabProps {
   accountData: AccountData;
+  onRefresh?: () => void;
 }
 
 function formatDate(timestamp: number): string {
@@ -34,8 +37,38 @@ function formatDate(timestamp: number): string {
   });
 }
 
-export default function BillingTab({ accountData }: BillingTabProps) {
+export default function BillingTab({ accountData, onRefresh }: BillingTabProps) {
   const { plan, planConfig, subscription, recentTransactions } = accountData;
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelMessage, setCancelMessage] = useState<string>("");
+
+  const subscriptionStatus = subscription.subscriptionStatus ?? "";
+  const isCancelled = subscriptionStatus === "cancelled";
+  const isSuspended = subscriptionStatus === "suspended";
+  const canCancel = plan !== "free" && !isCancelled && !isSuspended;
+
+  async function handleCancelConfirm() {
+    setCancelling(true);
+    try {
+      const res = await fetch("/api/paypal/cancel-subscription", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setCancelMessage(data.error || "Failed to cancel subscription. Please try again.");
+      } else {
+        setCancelMessage("Your subscription has been cancelled.");
+        onRefresh?.();
+      }
+    } catch {
+      setCancelMessage("An error occurred. Please try again.");
+    } finally {
+      setCancelling(false);
+      setShowConfirm(false);
+    }
+  }
 
   return (
     <div className="space-y-8">
@@ -88,15 +121,27 @@ export default function BillingTab({ accountData }: BillingTabProps) {
             </Link>
           </div>
         ) : (
-          <div className="space-y-2">
-            <p className="text-sm text-gray-900">
-              <span className="font-medium capitalize">
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <p className="text-sm font-medium text-gray-900 capitalize">
                 {planConfig.label} Plan
-              </span>
-            </p>
+              </p>
+              {isCancelled && (
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                  Cancelling
+                </span>
+              )}
+              {isSuspended && (
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                  Suspended
+                </span>
+              )}
+            </div>
             {subscription.planExpiresAt && (
               <p className="text-xs text-gray-500">
-                {subscription.planExpiresAt * 1000 > Date.now()
+                {isCancelled
+                  ? `Cancels on ${formatDate(subscription.planExpiresAt)}`
+                  : subscription.planExpiresAt * 1000 > Date.now()
                   ? `Renews on ${formatDate(subscription.planExpiresAt)}`
                   : `Expired on ${formatDate(subscription.planExpiresAt)}`}
               </p>
@@ -105,6 +150,54 @@ export default function BillingTab({ accountData }: BillingTabProps) {
               <p className="text-xs text-gray-400">
                 Subscription ID: {subscription.paypalSubscriptionId}
               </p>
+            )}
+
+            {cancelMessage && (
+              <p className="text-sm text-gray-600 bg-gray-50 rounded-lg px-3 py-2">
+                {cancelMessage}
+              </p>
+            )}
+
+            {canCancel && !showConfirm && (
+              <button
+                onClick={() => setShowConfirm(true)}
+                className="mt-2 text-sm text-red-600 hover:text-red-700 font-medium transition-colors cursor-pointer"
+              >
+                Cancel Subscription
+              </button>
+            )}
+
+            {showConfirm && (
+              <div className="mt-3 p-4 rounded-lg border border-red-100 bg-red-50 space-y-3">
+                <p className="text-sm text-gray-700">
+                  Are you sure you want to cancel?{" "}
+                  {subscription.planExpiresAt && (
+                    <>
+                      Your plan will remain active until{" "}
+                      <span className="font-medium">
+                        {formatDate(subscription.planExpiresAt)}
+                      </span>
+                      .
+                    </>
+                  )}
+                </p>
+                <div className="flex gap-3">
+                  <button
+                    onClick={handleCancelConfirm}
+                    disabled={cancelling}
+                    className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                  >
+                    {cancelling ? "Cancelling..." : "Confirm Cancel"}
+                  </button>
+                  <button
+                    onClick={() => setShowConfirm(false)}
+                    disabled={cancelling}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 border border-gray-300 hover:bg-gray-50 disabled:opacity-50 rounded-lg transition-colors cursor-pointer"
+                  >
+                    Keep Subscription
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         )}
