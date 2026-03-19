@@ -19,7 +19,7 @@
 
 ```
 image-background-remover/           # 项目根目录（也是 git 根目录）
-├── auth.ts                          # Auth.js 配置（Google Provider, JWT, Drizzle Adapter）
+├── auth.ts                          # Auth.js 配置（Google Provider 显式 endpoints, JWT, Drizzle Adapter）
 ├── middleware.ts                    # API 路由保护（JWT session 检查）
 ├── app/                             # Next.js App Router（必须在根级，不能在 src/ 下）
 │   ├── layout.tsx                   # 根布局 + SEO metadata + AuthProvider
@@ -111,6 +111,12 @@ REMOVE_BG_API_KEY=xxx                # remove.bg API Key（备选），仅服务
 AUTH_SECRET=xxx                      # Auth.js session 签名密钥
 AUTH_GOOGLE_ID=xxx                   # Google OAuth Client ID
 AUTH_GOOGLE_SECRET=xxx               # Google OAuth Client Secret
+PAYPAL_CLIENT_ID=xxx                 # PayPal Client ID（沙盒/生产）
+PAYPAL_CLIENT_SECRET=xxx             # PayPal Client Secret，仅服务端使用
+NEXT_PUBLIC_PAYPAL_CLIENT_ID=xxx     # 同 PAYPAL_CLIENT_ID，暴露给前端
+PAYPAL_PLAN_BASIC=P-xxx              # PayPal 订阅 Plan ID（Basic），setup script 生成
+PAYPAL_PLAN_PRO=P-xxx                # PayPal 订阅 Plan ID（Pro），setup script 生成
+PAYPAL_WEBHOOK_ID=xxx                # PayPal Webhook ID（Dashboard 创建）
 ```
 
 ## GitHub 仓库
@@ -150,10 +156,11 @@ npx wrangler pages deploy .open-next/assets \
 
 ## 待完成功能（Deferred）
 
-- **PayPal 集成**：支付按钮目前为 stub（alert "Coming Soon"），需要配置 PayPal REST API
-- **Overage 购买**：订阅用户超额单张购买（$0.12/Basic, $0.08/Pro），需 PayPal 先就绪
+- **~~PayPal 集成~~**：✅ 已完成（2026-03-19），PayPal JS SDK + REST API，支持信用点包购买和订阅制，沙盒环境
+- **~~Overage 购买~~**：❌ 不实现，用户购买信用点包替代
 - **账号删除**：隐私合规，需实现 API + UI
-- **D1 远程迁移**：部署前需在 Cloudflare D1 执行 0003 + 0004 migration
+- **PayPal Webhook 配置**：需在 PayPal Developer Dashboard 创建 Webhook，获取 PAYPAL_WEBHOOK_ID
+- **~~D1 远程迁移~~**：✅ 已完成（2026-03-19），0001~0005 全部已在远程 D1 执行
 
 ## 注意事项
 
@@ -165,3 +172,6 @@ npx wrangler pages deploy .open-next/assets \
 - `wrangler.jsonc` 中 `main` 和 `pages_build_output_dir` 不能同时存在
 - D1 migration 需按顺序执行：0001 → 0002 → 0003 → 0004
 - `next start` 模式下 D1 不可用（无 Cloudflare context），本地测试用 `npm run dev`
+- Auth.js 在 `npm run dev`（Cloudflare dev workerd）下 fetch Google OpenID Discovery 会失败，已在 auth.ts 中显式指定 authorization/token/userinfo 三个 endpoint 绕过自动发现
+- OAuth 登录测试推荐直接部署到 Cloudflare Pages 用生产域名测试，避免隧道域名频繁变化导致 Google OAuth redirect_uri_mismatch
+- `next.config.ts` 的 `allowedDevOrigins` 已包含 `*.loca.lt` 和 `*.lhr.life`（隧道 dev 测试用）
