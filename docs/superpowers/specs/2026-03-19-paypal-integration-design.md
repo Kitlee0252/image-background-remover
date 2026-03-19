@@ -48,9 +48,10 @@ Integrate PayPal payment functionality into the image-background-remover project
 8. Frontend refreshes, shows new plan status
 
 **Downgrade (Pro → Basic)**:
-1. Cancel existing PayPal subscription
-2. Create new subscription for lower plan
-3. Effective immediately (existing plan_expires_at overwritten)
+1. Create new Basic subscription first (user approves in PayPal popup)
+2. Only after new subscription is confirmed ACTIVE → cancel old Pro subscription
+3. Update user table with new plan, subscription ID, and plan_expires_at
+4. If step 1 fails (user cancels popup), no changes — old Pro subscription remains intact
 
 ### 3. Cancel Subscription
 
@@ -59,18 +60,20 @@ Integrate PayPal payment functionality into the image-background-remover project
 2. Confirmation dialog appears
 3. On confirm → `POST /api/paypal/cancel-subscription`
 4. Backend calls PayPal Subscriptions API to cancel
-5. Backend keeps current `plan` and `plan_expires_at` unchanged — user retains access until expiry
-6. Existing logic in `remove-background` API auto-downgrades to free when `plan_expires_at` is past
+5. Backend sets `subscription_status = 'cancelled'`, keeps `plan` and `plan_expires_at` unchanged — user retains access until expiry
+6. BillingTab shows "Cancels on {date}" instead of "Renews on {date}"
+7. Existing logic in `remove-background` API auto-downgrades to free when `plan_expires_at` is past
 
 ### 4. Subscription Renewal (Automatic)
 
 **Handled via webhook** — no user interaction.
 
 1. PayPal auto-charges monthly
-2. PayPal sends `PAYMENT.SALE.COMPLETED` webhook
+2. PayPal sends `BILLING.SUBSCRIPTION.PAYMENT.COMPLETED` webhook
 3. Backend verifies webhook signature
-4. Extends `plan_expires_at` by 1 month
-5. `recordTransaction(type: 'subscription_renewal')`
+4. Checks `subscription_status` is `active` (skip if already cancelled)
+5. Extends `plan_expires_at` by 1 month
+6. `recordTransaction(type: 'subscription_renewal')`
 
 ## Architecture
 
@@ -82,7 +85,8 @@ app/api/paypal/create-order/route.ts        # Credit pack order creation
 app/api/paypal/capture-order/route.ts       # Credit pack payment capture
 app/api/paypal/create-subscription/route.ts # Subscription creation
 app/api/paypal/cancel-subscription/route.ts # Subscription cancellation
-app/api/paypal/webhook/route.ts             # Webhook event handler
+app/api/webhooks/paypal/route.ts            # Webhook event handler (under /api/webhooks/* to match middleware exemption)
+migrations/0005_subscription_status.sql     # Add subscription_status column to user table
 scripts/setup-paypal-plans.ts               # One-time Plan creation script
 ```
 
@@ -102,7 +106,7 @@ package.json                                # Add @paypal/react-paypal-js
 
 Shared utility module:
 
-- `getAccessToken()`: OAuth2 client_credentials → Bearer token (cached until expiry)
+- `getAccessToken()`: OAuth2 client_credentials → Bearer token (fetched per request — no persistent cache on Cloudflare Workers)
 - `createOrder(amount, description)`: POST /v2/checkout/orders
 - `captureOrder(orderId)`: POST /v2/checkout/orders/{id}/capture
 - `createSubscription(planId)`: POST /v1/billing/subscriptions
@@ -116,13 +120,32 @@ Base URL: `https://api-m.sandbox.paypal.com` (sandbox) / `https://api-m.paypal.c
 
 | Event | Action |
 |-------|--------|
-| `PAYMENT.SALE.COMPLETED` | Extend plan_expires_at +1 month, record transaction |
-| `BILLING.SUBSCRIPTION.CANCELLED` | Mark subscription ended, retain access until expiry |
-| `BILLING.SUBSCRIPTION.SUSPENDED` | Same as cancelled — retain until expiry |
+| `BILLING.SUBSCRIPTION.ACTIVATED` | Subscription confirmed active (backup for onApprove) |
+| `BILLING.SUBSCRIPTION.PAYMENT.COMPLETED` | Recurring payment success → extend plan_expires_at +1 month, record transaction |
+| `BILLING.SUBSCRIPTION.CANCELLED` | Mark subscription_status='cancelled', retain access until expiry |
+| `BILLING.SUBSCRIPTION.SUSPENDED` | Mark subscription_status='suspended', retain access until expiry |
 
-**Idempotency**: Use `paypal_transaction_id` (from webhook payload) to deduplicate. Skip if transaction with same PayPal ID already exists.
+**Idempotency**: Use `paypal_transaction_id` (from webhook payload) to deduplicate. Enforce atomically via INSERT ... ON CONFLICT on `paypal_transaction_id` (requires UNIQUE constraint — see migration 0005). For transactions without a PayPal ID (e.g., free tier), the column remains NULL and is excluded from the constraint.
 
 **Signature verification**: Validate webhook using PayPal's verify-webhook-signature API with `PAYPAL_WEBHOOK_ID`.
+
+**Response behavior**: Always return HTTP 200 quickly, even if post-processing fails. Log errors for manual resolution. PayPal retries failed webhooks for up to 3 days — returning 5xx would trigger unnecessary retries.
+
+### Database Migration (`migrations/0005_subscription_status.sql`)
+
+```sql
+-- Add subscription_status to track active/cancelled/suspended state
+ALTER TABLE user ADD COLUMN subscription_status TEXT DEFAULT 'none';
+-- Values: 'none' | 'active' | 'cancelled' | 'suspended'
+
+-- Add UNIQUE constraint on paypal_transaction_id for idempotent webhook processing
+-- NULL values are excluded (SQLite allows multiple NULLs in UNIQUE columns)
+CREATE UNIQUE INDEX idx_transactions_paypal_id_unique
+  ON transactions(paypal_transaction_id) WHERE paypal_transaction_id IS NOT NULL;
+
+-- Drop the old non-unique index
+DROP INDEX IF EXISTS idx_transactions_paypal_id;
+```
 
 ## Security
 
@@ -135,8 +158,8 @@ Base URL: `https://api-m.sandbox.paypal.com` (sandbox) / `https://api-m.paypal.c
 ## Environment Variables
 
 ```
-PAYPAL_CLIENT_ID=AU3e4AhYQTsMyqXfXFg9J4_ZWFAxQhFU94nawEP2m-rwerMWJcPxy4Z9zL0BFtupmC2m_0g2mW8L-1Xr
-PAYPAL_CLIENT_SECRET=EPLe4yMZQRhaLkS_a6iscvmnfqHuL06m5XL39AJCmOwWgytwBkPS8qxT4tp_h4JQcwejSuUgkma8j9E1
+PAYPAL_CLIENT_ID=xxx                 # PayPal Client ID (sandbox or production)
+PAYPAL_CLIENT_SECRET=xxx             # PayPal Client Secret (server-side only)
 PAYPAL_PLAN_BASIC=P-xxx              # Generated by setup script
 PAYPAL_PLAN_PRO=P-xxx                # Generated by setup script
 PAYPAL_WEBHOOK_ID=xxx                # Created in PayPal Developer Dashboard
@@ -178,6 +201,7 @@ Wrap account page (not global layout — only needed on account page) with:
 Replace `alert("PayPal integration coming soon!")` with `<PayPalButtons>`:
 - `createOrder`: POST to `/api/paypal/create-order` with `{ packId }`
 - `onApprove`: POST to `/api/paypal/capture-order` with `{ orderId }`
+- `onCancel`: show "Payment cancelled" message, no server-side action
 - `onError`: show error toast
 - Button styled to match existing card design (small, contained)
 
@@ -205,8 +229,8 @@ Replace stub with `<PayPalButtons>` in subscription mode:
 
 ## Sandbox → Production Migration
 
-Only two changes needed:
+Four steps:
 1. Replace `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` with production credentials
-2. PayPal API base URL switches from `api-m.sandbox.paypal.com` to `api-m.paypal.com`
+2. PayPal API base URL automatically switches (determined by env var `PAYPAL_MODE=live`)
 3. Run setup script again with production credentials to create production Plans
-4. Configure production webhook in PayPal Developer Dashboard
+4. Configure production webhook in PayPal Developer Dashboard, update `PAYPAL_WEBHOOK_ID`
